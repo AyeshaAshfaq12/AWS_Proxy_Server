@@ -16,6 +16,8 @@ def get_api_key() -> str:
 
 def get_target_credentials() -> dict:
     prefix = os.getenv("SSM_PARAMETER_PATH")
+    if not prefix:
+        raise Exception("SSM_PARAMETER_PATH environment variable is not set.")
     return {
         'username': get_parameter(prefix + "username"),
         'password': get_parameter(prefix + "password")

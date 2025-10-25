@@ -13,51 +13,41 @@ def get_stealthwriter_cookies(email, password):
 
     driver.get("https://app.stealthwriter.ai/auth/sign-in")
 
-    # Wait for Cloudflare challenge to pass (page may reload)
-    max_wait = 60
-    found = False
-    for _ in range(max_wait // 2):
-        time.sleep(2)
-        # Try to find the email field in main document
-        try:
-            email_input = driver.find_element(By.NAME, "email")
-            found = True
-            break
-        except:
-            pass
-        # Try to find the email field in iframes
-        for iframe in driver.find_elements(By.TAG_NAME, "iframe"):
-            driver.switch_to.frame(iframe)
-            try:
-                email_input = driver.find_element(By.NAME, "email")
-                found = True
-                break
-            except:
-                driver.switch_to.default_content()
-        if found:
-            break
-        driver.switch_to.default_content()
-    if not found:
+    # Wait for email and password fields
+    try:
+        email_input = WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.NAME, "email"))
+        )
+        password_input = WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.NAME, "password"))
+        )
+    except Exception:
         driver.quit()
-        raise Exception("Timeout: Email input not found. Cloudflare or page structure may have changed.")
+        raise Exception("Timeout: Email or password input not found. Cloudflare or page structure may have changed.")
 
-    # Fill in credentials
     email_input.send_keys(email)
-    driver.find_element(By.NAME, "password").send_keys(password)
+    password_input.send_keys(password)
 
-    # Wait for Turnstile (Cloudflare) widget to complete
-    time.sleep(10)
+    # Wait for login button to become enabled (Turnstile must complete)
+    try:
+        login_btn = WebDriverWait(driver, 60).until(
+            lambda d: d.find_element(By.XPATH, "//button[@type='submit' and not(@disabled)]")
+        )
+    except Exception:
+        driver.quit()
+        raise Exception("Timeout: Login button is still disabled. Cloudflare Turnstile challenge not passed.")
 
-    # Submit the form
-    submit_btn = driver.find_element(By.XPATH, "//button[@type='submit']")
-    submit_btn.click()
+    login_btn.click()
 
     # Wait for dashboard to load
-    WebDriverWait(driver, 30).until(
-        EC.url_contains("/dashboard")
-    )
+    try:
+        WebDriverWait(driver, 30).until(
+            EC.url_contains("/dashboard")
+        )
+    except Exception:
+        driver.quit()
+        raise Exception("Login failed or dashboard did not load.")
 
-    # Extract cookies
     cookies = driver.get_cookies()
     driver.quit()
     return cookies

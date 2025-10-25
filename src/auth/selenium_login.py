@@ -1,10 +1,8 @@
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
-import os
 
 def get_stealthwriter_cookies(email, password):
     options = webdriver.ChromeOptions()
@@ -15,24 +13,49 @@ def get_stealthwriter_cookies(email, password):
 
     driver.get("https://app.stealthwriter.ai/auth/sign-in")
 
-    # Wait for the email field to be present
-    WebDriverWait(driver, 20).until(
-        EC.presence_of_element_located((By.NAME, "email"))
-    )
+    # Wait for Cloudflare challenge to pass (page may reload)
+    max_wait = 60
+    found = False
+    for _ in range(max_wait // 2):
+        time.sleep(2)
+        # Try to find the email field in main document
+        try:
+            email_input = driver.find_element(By.NAME, "email")
+            found = True
+            break
+        except:
+            pass
+        # Try to find the email field in iframes
+        for iframe in driver.find_elements(By.TAG_NAME, "iframe"):
+            driver.switch_to.frame(iframe)
+            try:
+                email_input = driver.find_element(By.NAME, "email")
+                found = True
+                break
+            except:
+                driver.switch_to.default_content()
+        if found:
+            break
+        driver.switch_to.default_content()
+    if not found:
+        driver.quit()
+        raise Exception("Timeout: Email input not found. Cloudflare or page structure may have changed.")
 
-    driver.find_element(By.NAME, "email").send_keys(email)
+    # Fill in credentials
+    email_input.send_keys(email)
     driver.find_element(By.NAME, "password").send_keys(password)
 
-    # Wait for Cloudflare Turnstile (may need to increase sleep)
+    # Wait for Turnstile (Cloudflare) widget to complete
     time.sleep(10)
 
     # Submit the form
-    driver.find_element(By.XPATH, "//button[@type='submit']").click()
-    time.sleep(5)
+    submit_btn = driver.find_element(By.XPATH, "//button[@type='submit']")
+    submit_btn.click()
 
-    # Go to dashboard to confirm login
-    driver.get("https://app.stealthwriter.ai/dashboard")
-    time.sleep(2)
+    # Wait for dashboard to load
+    WebDriverWait(driver, 30).until(
+        EC.url_contains("/dashboard")
+    )
 
     # Extract cookies
     cookies = driver.get_cookies()

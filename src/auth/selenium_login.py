@@ -10,7 +10,6 @@ import os
 import tempfile
 import uuid
 import subprocess
-import signal
 
 def get_stealthwriter_cookies(email, password):
     # Try to start Xvfb if not running and DISPLAY is set
@@ -65,7 +64,7 @@ def get_stealthwriter_cookies(email, password):
         # Non-headless mode (for local development)
         print("Running in non-headless mode")
     
-    # Common options for server environments - Enhanced for stability
+    # Common options for server environments
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-plugins")
     options.add_argument("--no-first-run")
@@ -80,33 +79,10 @@ def get_stealthwriter_cookies(email, password):
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--start-maximized")
     
-    # Additional stability options
-    options.add_argument("--disable-web-security")
-    options.add_argument("--disable-features=VizDisplayCompositor")
-    options.add_argument("--disable-crash-reporter")
-    options.add_argument("--disable-logging")
-    options.add_argument("--disable-component-update")
-    options.add_argument("--disable-background-networking")
-    options.add_argument("--disable-sync")
-    options.add_argument("--metrics-recording-only")
-    options.add_argument("--no-report-upload")
-    options.add_argument("--disable-breakpad")
-    
-    # Set shorter timeouts for WebDriver
-    service = webdriver.ChromeService()
-    service.start_timeout = 30  # Reduce startup timeout
-    
     driver = None
-    start_time = time.time()
-    max_total_time = 300  # 5 minutes maximum
-    
     try:
         print(f"Starting Chrome with display: {os.environ.get('DISPLAY', 'none')}")
-        
-        # Create driver with shorter timeout
-        driver = webdriver.Chrome(options=options, service=service)
-        driver.set_page_load_timeout(60)  # Set page load timeout
-        driver.implicitly_wait(10)  # Set implicit wait
+        driver = webdriver.Chrome(options=options)
         
         # Enhanced stealth mode
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -116,15 +92,11 @@ def get_stealthwriter_cookies(email, password):
         print("Navigating to StealthWriter.ai login page...")
         driver.get("https://app.stealthwriter.ai/auth/sign-in")
         
-        # Wait for page to fully load with timeout check
+        # Wait for page to fully load
         WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.ID, "email"))
         )
-        time.sleep(random.uniform(2, 3))
-        
-        # Check if we've exceeded time limit
-        if time.time() - start_time > max_total_time:
-            raise Exception("Total time limit exceeded")
+        time.sleep(random.uniform(3, 5))
         
         # Fill email field
         print("Filling email field...")
@@ -138,18 +110,16 @@ def get_stealthwriter_cookies(email, password):
         _human_type(password_input, password)
         time.sleep(random.uniform(1, 2))
         
-        # Handle Cloudflare Turnstile - Improved with shorter timeouts and better error handling
+        # Handle Cloudflare Turnstile - Enhanced detection
         print("Waiting for Cloudflare Turnstile to complete...")
         
         submit_button = None
         turnstile_completed = False
-        turnstile_start_time = time.time()
-        max_turnstile_time = 120  # 2 minutes for Turnstile
         
-        # Method 1: Wait for submit button to be enabled (shorter timeout)
+        # Method 1: Wait for submit button to be enabled
         try:
             print("Waiting for submit button to be enabled...")
-            submit_button = WebDriverWait(driver, 60).until(  # Reduced from 120 to 60
+            submit_button = WebDriverWait(driver, 120).until(
                 lambda d: d.find_element(By.CSS_SELECTOR, "button[type='submit']").is_enabled()
             )
             turnstile_completed = True
@@ -157,99 +127,61 @@ def get_stealthwriter_cookies(email, password):
         except TimeoutException:
             print("❌ Submit button never became enabled")
         
-        # Check time limit for Turnstile
-        if time.time() - turnstile_start_time > max_turnstile_time:
-            raise Exception("Turnstile timeout - exceeded maximum wait time")
-        
-        # Method 2: Check for Turnstile response token (if button method failed)
+        # Method 2: Check for Turnstile response token
         if not turnstile_completed:
             try:
                 print("Checking for Turnstile response token...")
-                # Try multiple times with shorter waits
-                for attempt in range(3):
-                    try:
-                        token_result = driver.execute_script(
-                            "return document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || ''"
-                        )
-                        if token_result and len(token_result) > 0:
-                            submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
-                            turnstile_completed = True
-                            print("✅ Turnstile completed - found response token!")
-                            break
-                    except Exception as e:
-                        print(f"Token check attempt {attempt + 1} failed: {e}")
-                    
-                    if attempt < 2:  # Don't sleep on last attempt
-                        time.sleep(10)
-                        
-            except Exception as e:
-                print(f"❌ Turnstile token check failed: {e}")
+                WebDriverWait(driver, 30).until(
+                    lambda d: len(d.execute_script(
+                        "return document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || ''"
+                    )) > 0
+                )
+                submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+                turnstile_completed = True
+                print("✅ Turnstile completed - found response token!")
+            except TimeoutException:
+                print("❌ No Turnstile response token found")
         
-        # Method 3: Check if iframe disappeared (last resort)
-        if not turnstile_completed and time.time() - turnstile_start_time < max_turnstile_time:
+        # Method 3: Force click if Turnstile iframe disappears
+        if not turnstile_completed:
             try:
                 print("Checking iframe state...")
-                for attempt in range(3):
-                    try:
-                        iframe_present = driver.execute_script(
-                            "return !!document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
-                        )
-                        if not iframe_present:
-                            submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
-                            turnstile_completed = True
-                            print("✅ Turnstile iframe disappeared!")
-                            break
-                    except Exception as e:
-                        print(f"Iframe check attempt {attempt + 1} failed: {e}")
-                    
-                    if attempt < 2:
-                        time.sleep(5)
-                        
-            except Exception as e:
-                print(f"❌ Iframe check failed: {e}")
+                WebDriverWait(driver, 30).until(
+                    lambda d: not d.execute_script(
+                        "return !!document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
+                    )
+                )
+                submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+                turnstile_completed = True
+                print("✅ Turnstile iframe disappeared!")
+            except TimeoutException:
+                print("❌ Turnstile iframe still present")
         
         if not turnstile_completed:
             raise Exception("Failed to complete Turnstile challenge after all methods")
         
-        # Check total time limit again
-        if time.time() - start_time > max_total_time:
-            raise Exception("Total time limit exceeded after Turnstile")
-        
         # Additional wait to ensure everything is ready
-        time.sleep(random.uniform(1, 2))
+        time.sleep(random.uniform(2, 4))
         
-        # Click the login button with error handling
+        # Click the login button
         print("Clicking login button...")
-        login_clicked = False
-        
-        for click_attempt in range(3):
+        try:
+            # Scroll to button and click
+            driver.execute_script("arguments[0].scrollIntoView(true);", submit_button)
+            time.sleep(1)
+            
+            # Try ActionChains first
+            ActionChains(driver).move_to_element(submit_button).pause(0.5).click().perform()
+        except Exception as click_error:
+            print(f"ActionChains click failed: {click_error}, trying direct click...")
             try:
-                if click_attempt == 0:
-                    # Method 1: ActionChains
-                    driver.execute_script("arguments[0].scrollIntoView(true);", submit_button)
-                    time.sleep(0.5)
-                    ActionChains(driver).move_to_element(submit_button).pause(0.5).click().perform()
-                elif click_attempt == 1:
-                    # Method 2: Direct click
-                    submit_button.click()
-                else:
-                    # Method 3: JavaScript click
-                    driver.execute_script("arguments[0].click();", submit_button)
-                
-                login_clicked = True
-                print(f"Login button clicked successfully (method {click_attempt + 1})")
-                break
-                
-            except Exception as click_error:
-                print(f"Click attempt {click_attempt + 1} failed: {click_error}")
-                if click_attempt < 2:
-                    time.sleep(1)
-        
-        if not login_clicked:
-            raise Exception("Failed to click login button after all attempts")
+                submit_button.click()
+            except Exception as direct_click_error:
+                print(f"Direct click failed: {direct_click_error}, trying JavaScript click...")
+                driver.execute_script("arguments[0].click();", submit_button)
         
         print("Login button clicked, waiting for response...")
-        time.sleep(2)
+        time.sleep(3)
         
         # Check for login errors first
         try:
@@ -262,13 +194,13 @@ def get_stealthwriter_cookies(email, password):
             if "Login error detected" in str(e):
                 raise e
         
-        # Wait for successful login with multiple indicators (shorter timeout)
+        # Wait for successful login with multiple indicators
         print("Waiting for login to complete...")
         login_success = False
         
         try:
-            # Reduced timeout from 45 to 30 seconds
-            WebDriverWait(driver, 30).until(
+            # Wait for URL change OR dashboard content
+            WebDriverWait(driver, 45).until(
                 lambda d: (
                     "/dashboard" in d.current_url or 
                     "/app" in d.current_url or
@@ -296,20 +228,12 @@ def get_stealthwriter_cookies(email, password):
         
         # Extract cookies after successful login
         print("Extracting cookies...")
-        cookies = []
+        cookies = driver.get_cookies()
         
-        # Try multiple times to get cookies
-        for cookie_attempt in range(3):
-            try:
-                cookies = driver.get_cookies()
-                if cookies:
-                    break
-                print(f"No cookies found on attempt {cookie_attempt + 1}, waiting...")
-                time.sleep(1)
-            except Exception as e:
-                print(f"Cookie extraction attempt {cookie_attempt + 1} failed: {e}")
-                if cookie_attempt < 2:
-                    time.sleep(1)
+        if not cookies:
+            # Sometimes cookies take a moment to appear, wait and try again
+            time.sleep(2)
+            cookies = driver.get_cookies()
         
         if not cookies:
             raise Exception("No cookies found after successful login")
@@ -329,9 +253,8 @@ def get_stealthwriter_cookies(email, password):
         return valid_cookies
         
     except Exception as e:
-        # Enhanced debugging with time tracking
-        total_time = time.time() - start_time
-        error_info = f"Login failed after {total_time:.1f}s: {str(e)}"
+        # Enhanced debugging
+        error_info = f"Login failed: {str(e)}"
         
         try:
             timestamp = int(time.time())
@@ -339,12 +262,8 @@ def get_stealthwriter_cookies(email, password):
             screenshot_file = f"selenium_error_{timestamp}.png"
             
             if driver:
-                try:
-                    with open(error_file, "w", encoding="utf-8") as f:
-                        f.write(driver.page_source)
-                    print(f"Page source saved: {error_file}")
-                except Exception as save_e:
-                    print(f"Could not save page source: {save_e}")
+                with open(error_file, "w", encoding="utf-8") as f:
+                    f.write(driver.page_source)
                 
                 try:
                     driver.save_screenshot(screenshot_file)
@@ -352,43 +271,32 @@ def get_stealthwriter_cookies(email, password):
                 except Exception as ss_e:
                     print(f"Could not save screenshot: {ss_e}")
                 
+                print(f"Current URL: {driver.current_url}")
+                print(f"Page source saved: {error_file}")
+                
+                # Enhanced debugging information
                 try:
-                    print(f"Current URL: {driver.current_url}")
+                    # Check Turnstile state
+                    turnstile_token = driver.execute_script(
+                        "return document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || 'not found'"
+                    )
+                    print(f"Turnstile token: {'present' if turnstile_token and turnstile_token != 'not found' else 'missing'}")
                     
-                    # Enhanced debugging information with error handling
-                    try:
-                        # Check Turnstile state
-                        turnstile_token = driver.execute_script(
-                            "return document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || 'not found'"
-                        )
-                        print(f"Turnstile token: {'present' if turnstile_token and turnstile_token != 'not found' else 'missing'}")
-                    except:
-                        print("Could not check Turnstile token")
+                    # Check button state
+                    button_disabled = driver.execute_script(
+                        "return document.querySelector('button[type=\"submit\"]')?.disabled || 'button not found'"
+                    )
+                    print(f"Submit button disabled: {button_disabled}")
                     
-                    try:
-                        # Check button state
-                        button_disabled = driver.execute_script(
-                            "return document.querySelector('button[type=\"submit\"]')?.disabled || 'button not found'"
-                        )
-                        print(f"Submit button disabled: {button_disabled}")
-                    except:
-                        print("Could not check button state")
+                    # Check for error messages
+                    error_elements = driver.find_elements(By.CSS_SELECTOR, "[role='alert'], .error, .alert-error, .text-red-500, .text-destructive")
+                    if error_elements:
+                        error_messages = [elem.text for elem in error_elements if elem.text.strip()]
+                        print(f"Error messages on page: {error_messages}")
                     
-                    try:
-                        # Check for error messages
-                        error_elements = driver.find_elements(By.CSS_SELECTOR, "[role='alert'], .error, .alert-error, .text-red-500, .text-destructive")
-                        if error_elements:
-                            error_messages = [elem.text for elem in error_elements if elem.text.strip()]
-                            print(f"Error messages on page: {error_messages}")
-                    except:
-                        print("Could not check for error messages")
-                    
-                    try:
-                        # Check if we're logged in but cookies aren't loading
-                        if "/dashboard" in driver.current_url or "dashboard" in driver.page_source.lower():
-                            print("⚠️  Appears to be logged in but no cookies found - this is unusual")
-                    except:
-                        print("Could not check login status")
+                    # Check if we're logged in but cookies aren't loading
+                    if "/dashboard" in driver.current_url or "dashboard" in driver.page_source.lower():
+                        print("⚠️  Appears to be logged in but no cookies found - this is unusual")
                         
                 except Exception as debug_e:
                     print(f"Debug info error: {debug_e}")
@@ -400,18 +308,9 @@ def get_stealthwriter_cookies(email, password):
     finally:
         if driver:
             try:
-                # Force quit the driver with timeout
                 driver.quit()
             except Exception as quit_error:
                 print(f"Error closing driver: {quit_error}")
-                # Force kill if normal quit fails
-                try:
-                    if hasattr(driver, 'service') and driver.service.process:
-                        os.kill(driver.service.process.pid, signal.SIGTERM)
-                        time.sleep(1)
-                        os.kill(driver.service.process.pid, signal.SIGKILL)
-                except:
-                    pass
         
         # Cleanup temporary directory
         try:
@@ -424,11 +323,11 @@ def get_stealthwriter_cookies(email, password):
 def _human_type(element, text):
     """Simulate human-like typing with random delays"""
     element.clear()
-    time.sleep(random.uniform(0.1, 0.2))  # Reduced delay
+    time.sleep(random.uniform(0.1, 0.3))
     
     for char in text:
         element.send_keys(char)
-        time.sleep(random.uniform(0.03, 0.08))  # Reduced delay
+        time.sleep(random.uniform(0.05, 0.15))
     
     # Random pause after typing
-    time.sleep(random.uniform(0.1, 0.3))  # Reduced delay
+    time.sleep(random.uniform(0.2, 0.5))

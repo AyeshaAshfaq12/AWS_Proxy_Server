@@ -11,6 +11,73 @@ _master_client_lock = asyncio.Lock()
 _last_refresh = 0
 _session_timeout = int(os.getenv("SESSION_TIMEOUT", 3600))
 
+def load_manual_cookies_from_file():
+    """
+    Load cookies from manual_cookies.json file
+    """
+    try:
+        cookies_file = "manual_cookies.json"
+        
+        if not os.path.exists(cookies_file):
+            print("❌ manual_cookies.json file not found")
+            return None
+        
+        with open(cookies_file, "r") as f:
+            cookies_data = json.load(f)
+        
+        # Check if cookies are still relatively fresh (within 24 hours)
+        current_time = time.time()
+        cookie_timestamp = cookies_data.get("timestamp", current_time)
+        cookie_age = current_time - cookie_timestamp
+        max_age = 86400  # 24 hours
+        
+        if cookie_age > max_age:
+            print(f"⏰ Manual cookies are {cookie_age/3600:.1f} hours old (max {max_age/3600} hours)")
+            print("💡 You may want to update the cookies in manual_cookies.json")
+        
+        cookies = cookies_data.get("cookies", [])
+        print(f"✅ Loaded {len(cookies)} manual cookies from file (age: {cookie_age/3600:.1f} hours)")
+        
+        return cookies
+        
+    except Exception as e:
+        print(f"❌ Failed to load manual cookies from file: {e}")
+        return None
+
+def save_manual_cookies_to_file(cookies_dict):
+    """
+    Save cookies dict to manual_cookies.json file
+    """
+    try:
+        # Convert dict to cookie format
+        cookies = []
+        for name, value in cookies_dict.items():
+            cookies.append({
+                "name": name,
+                "value": value,
+                "domain": ".stealthwriter.ai",
+                "path": "/",
+                "secure": name.startswith("__Secure-"),
+                "httpOnly": name in ["__Secure-better-auth.session_token"]
+            })
+        
+        cookies_data = {
+            "timestamp": time.time(),
+            "url": "https://app.stealthwriter.ai/dashboard",
+            "cookies": cookies
+        }
+        
+        cookies_file = "manual_cookies.json"
+        with open(cookies_file, "w") as f:
+            json.dump(cookies_data, f, indent=2)
+        
+        print(f"💾 Saved {len(cookies)} cookies to {cookies_file}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to save cookies to file: {e}")
+        return False
+
 async def get_authenticated_client():
     global _master_client, _last_refresh
     async with _master_client_lock:
@@ -36,30 +103,48 @@ async def _refresh_session():
         
         print("🔄 Refreshing session...")
         
-        # First, try to load manual cookies
-        cookies = load_manual_cookies()
+        # Priority order for loading cookies:
+        # 1. Manual cookies from JSON file
+        # 2. Manual cookies from selenium login
+        # 3. Automated login (fallback)
         
-        if cookies:
-            print(f"✅ Using manual cookies ({len(cookies)} found)")
+        cookies = None
+        
+        # Try manual JSON file first
+        manual_cookies = load_manual_cookies_from_file()
+        if manual_cookies:
+            print("✅ Using manual cookies from JSON file")
+            cookies = manual_cookies
         else:
-            print("❌ No manual cookies found, trying automated login...")
-            # Get credentials from AWS SSM for automated login
-            credentials = get_target_credentials()
-            
-            # Use Selenium to get fresh cookies with Cloudflare bypass
-            print("Refreshing session with Selenium...")
-            cookies = await asyncio.get_event_loop().run_in_executor(
-                None, 
-                get_stealthwriter_cookies,
-                credentials['username'],
-                credentials['password']
-            )
+            # Try selenium manual login cookies
+            selenium_cookies = load_manual_cookies()
+            if selenium_cookies:
+                print("✅ Using manual cookies from selenium login")
+                cookies = selenium_cookies
+            else:
+                print("❌ No manual cookies found, trying automated login...")
+                # Get credentials from AWS SSM for automated login
+                credentials = get_target_credentials()
+                
+                # Use Selenium to get fresh cookies with Cloudflare bypass
+                print("Refreshing session with Selenium...")
+                cookies = await asyncio.get_event_loop().run_in_executor(
+                    None, 
+                    get_stealthwriter_cookies,
+                    credentials['username'],
+                    credentials['password']
+                )
         
         if not cookies:
             raise Exception("No cookies available from any method")
         
         # Convert cookies to httpx format
-        cookie_dict = {cookie['name']: cookie['value'] for cookie in cookies}
+        if isinstance(cookies, list):
+            # Selenium format
+            cookie_dict = {cookie['name']: cookie['value'] for cookie in cookies}
+        else:
+            # Already a dict
+            cookie_dict = cookies
         
         # Create new HTTP client with cookies and proper headers
         headers = {
@@ -73,7 +158,8 @@ async def _refresh_session():
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
             "Sec-Fetch-User": "?1",
-            "Cache-Control": "max-age=0"
+            "Cache-Control": "max-age=0",
+            "Referer": "https://app.stealthwriter.ai/"
         }
         
         _master_client = httpx.AsyncClient(

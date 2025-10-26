@@ -6,7 +6,8 @@ import time
 
 def get_stealthwriter_cookies(email, password):
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
+    # Comment out or remove headless for debugging
+    # options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     driver = webdriver.Chrome(options=options)
@@ -45,8 +46,10 @@ def get_stealthwriter_cookies(email, password):
             EC.url_contains("/dashboard")
         )
     except Exception:
+        with open("selenium_error.html", "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
         driver.quit()
-        raise Exception("Login failed or dashboard did not load.")
+        raise Exception("Login failed or dashboard did not load. See selenium_error.html for details.")
 
     cookies = driver.get_cookies()
     driver.quit()

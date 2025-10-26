@@ -8,8 +8,24 @@ import random
 import os
 import tempfile
 import uuid
+import subprocess
 
 def get_stealthwriter_cookies(email, password):
+    # Try to start Xvfb if not running and DISPLAY is set
+    if os.getenv("DISPLAY"):
+        try:
+            subprocess.run(["pgrep", "Xvfb"], check=True, capture_output=True)
+            print("Xvfb already running")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("Starting Xvfb...")
+            try:
+                subprocess.Popen([
+                    "Xvfb", os.getenv("DISPLAY"), "-screen", "0", "1920x1080x24"
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(2)
+            except FileNotFoundError:
+                print("Xvfb not found, proceeding without virtual display")
+    
     options = webdriver.ChromeOptions()
     
     # Create unique user data directory for each session
@@ -23,18 +39,33 @@ def get_stealthwriter_cookies(email, password):
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     # Add unique user data directory
     options.add_argument(f"--user-data-dir={user_data_dir}")
     
-    # Server-specific options for EC2/headless environments
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
+    # Check if we should use headless mode
+    use_headless = os.getenv("SELENIUM_HEADLESS", "true").lower() == "true"
+    has_display = bool(os.getenv("DISPLAY"))
+    
+    if use_headless and not has_display:
+        # Use headless mode
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--virtual-time-budget=5000")
+        options.add_argument("--run-all-compositor-stages-before-draw")
+        print("Running in headless mode")
+    elif has_display:
+        # Use virtual display
+        options.add_argument(f"--display={os.getenv('DISPLAY')}")
+        print(f"Using virtual display: {os.getenv('DISPLAY')}")
+    else:
+        # Non-headless mode (for local development)
+        print("Running in non-headless mode")
+    
+    # Common options for server environments
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-plugins")
-    options.add_argument("--disable-images")
-    options.add_argument("--disable-javascript")
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
     options.add_argument("--disable-default-apps")
@@ -45,67 +76,94 @@ def get_stealthwriter_cookies(email, password):
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-ipc-flooding-protection")
     options.add_argument("--window-size=1920,1080")
-    
-    # Override headless mode if environment variable is set
-    if os.getenv("SELENIUM_HEADLESS", "true").lower() == "false":
-        # Remove headless argument for debugging
-        options.arguments = [arg for arg in options.arguments if not arg.startswith("--headless")]
+    options.add_argument("--start-maximized")
     
     driver = None
     try:
+        print(f"Starting Chrome with display: {os.environ.get('DISPLAY', 'none')}")
         driver = webdriver.Chrome(options=options)
         
-        # Remove automation indicators
+        # Enhanced stealth mode
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        driver.execute_script("window.chrome = { runtime: {} };")
+        driver.execute_script("delete navigator.__webdriver_script_fn;")
         
         print("Navigating to StealthWriter.ai login page...")
         driver.get("https://app.stealthwriter.ai/auth/sign-in")
         
-        # Random delay to appear more human-like
-        time.sleep(random.uniform(2, 4))
-        
-        # Wait for and fill email field
-        print("Filling email field...")
-        email_input = WebDriverWait(driver, 30).until(
-            EC.element_to_be_clickable((By.ID, "email"))
+        # Wait for page to fully load
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.ID, "email"))
         )
+        time.sleep(random.uniform(3, 5))
         
-        # Human-like typing
+        # Fill email field
+        print("Filling email field...")
+        email_input = driver.find_element(By.ID, "email")
         _human_type(email_input, email)
         time.sleep(random.uniform(1, 2))
         
-        # Wait for and fill password field
+        # Fill password field
         print("Filling password field...")
-        password_input = WebDriverWait(driver, 30).until(
-            EC.element_to_be_clickable((By.ID, "password"))
-        )
-        
+        password_input = driver.find_element(By.ID, "password")
         _human_type(password_input, password)
         time.sleep(random.uniform(1, 2))
         
-        # Wait for Turnstile to complete (longer timeout)
+        # Handle Cloudflare Turnstile
         print("Waiting for Cloudflare Turnstile to complete...")
         
-        # First wait for the submit button to exist
-        submit_button = WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "button[type='submit']"))
-        )
+        # Method 1: Wait for submit button to be enabled (most reliable)
+        try:
+            submit_button = WebDriverWait(driver, 180).until(
+                lambda d: d.find_element(By.CSS_SELECTOR, "button[type='submit']").is_enabled()
+            )
+            print("Turnstile completed - submit button is now enabled!")
+        except Exception as e:
+            print(f"Method 1 failed: {e}")
+            
+            # Method 2: Wait for Turnstile response token
+            try:
+                print("Trying alternative Turnstile detection...")
+                WebDriverWait(driver, 60).until(
+                    lambda d: d.execute_script(
+                        "return document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || ''"
+                    ) != ""
+                )
+                submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+                print("Turnstile completed - found response token!")
+            except Exception as e2:
+                print(f"Method 2 failed: {e2}")
+                
+                # Method 3: Wait for Turnstile iframe to disappear or change
+                try:
+                    print("Trying iframe-based detection...")
+                    WebDriverWait(driver, 60).until(
+                        lambda d: d.execute_script(
+                            "return !document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]') || "
+                            "document.querySelector('button[type=\"submit\"]').disabled === false"
+                        )
+                    )
+                    submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+                    print("Turnstile completed - iframe method!")
+                except Exception as e3:
+                    print(f"All Turnstile detection methods failed: {e3}")
+                    raise Exception("Could not detect Turnstile completion")
         
-        # Then wait for it to become enabled (Turnstile completion)
-        login_btn = WebDriverWait(driver, 120).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "button[type='submit']"))
-        )
-        
-        # Additional wait to ensure Turnstile is fully completed
+        # Additional wait to ensure everything is ready
         time.sleep(random.uniform(2, 4))
         
+        # Click the login button
         print("Clicking login button...")
-        # Use ActionChains for more human-like clicking
-        ActionChains(driver).move_to_element(login_btn).pause(0.5).click().perform()
+        try:
+            # Try ActionChains first
+            ActionChains(driver).move_to_element(submit_button).pause(0.5).click().perform()
+        except Exception:
+            # Fallback to direct click
+            submit_button.click()
         
-        # Wait for successful login (dashboard or redirect)
+        # Wait for successful login
         print("Waiting for login to complete...")
-        WebDriverWait(driver, 45).until(
+        WebDriverWait(driver, 60).until(
             lambda d: "/dashboard" in d.current_url or 
                      "/app" in d.current_url or 
                      "dashboard" in d.page_source.lower()
@@ -117,20 +175,50 @@ def get_stealthwriter_cookies(email, password):
         if not cookies:
             raise Exception("No cookies found after login")
         
-        print(f"Extracted {len(cookies)} cookies")
+        print(f"Successfully extracted {len(cookies)} cookies")
         return cookies
         
     except Exception as e:
-        # Save page source for debugging
+        # Enhanced debugging
         try:
-            error_file = f"selenium_error_{int(time.time())}.html"
-            with open(error_file, "w", encoding="utf-8") as f:
-                f.write(driver.page_source if driver else "No driver available")
-            print(f"Error page saved to {error_file}")
+            timestamp = int(time.time())
+            error_file = f"selenium_error_{timestamp}.html"
+            screenshot_file = f"selenium_error_{timestamp}.png"
+            
             if driver:
+                with open(error_file, "w", encoding="utf-8") as f:
+                    f.write(driver.page_source)
+                
+                try:
+                    driver.save_screenshot(screenshot_file)
+                    print(f"Screenshot saved: {screenshot_file}")
+                except Exception as ss_e:
+                    print(f"Could not save screenshot: {ss_e}")
+                
                 print(f"Current URL: {driver.current_url}")
-        except:
-            pass
+                print(f"Page source saved: {error_file}")
+                
+                # Check Turnstile state for debugging
+                try:
+                    turnstile_token = driver.execute_script(
+                        "return document.querySelector('input[name=\"cf-turnstile-response\"]')?.value || 'not found'"
+                    )
+                    print(f"Turnstile token: {turnstile_token[:50]}..." if len(turnstile_token) > 50 else turnstile_token)
+                    
+                    button_disabled = driver.execute_script(
+                        "return document.querySelector('button[type=\"submit\"]')?.disabled || 'button not found'"
+                    )
+                    print(f"Submit button disabled: {button_disabled}")
+                    
+                    turnstile_iframe = driver.execute_script(
+                        "return !!document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
+                    )
+                    print(f"Turnstile iframe present: {turnstile_iframe}")
+                    
+                except Exception as debug_e:
+                    print(f"Debug info error: {debug_e}")
+        except Exception as save_e:
+            print(f"Could not save debug info: {save_e}")
         
         raise Exception(f"Login failed: {str(e)}")
     
@@ -138,13 +226,13 @@ def get_stealthwriter_cookies(email, password):
         if driver:
             driver.quit()
         
-        # Clean up temporary user data directory
+        # Cleanup temporary directory
         try:
             import shutil
             if os.path.exists(user_data_dir):
                 shutil.rmtree(user_data_dir, ignore_errors=True)
-        except:
-            pass
+        except Exception as cleanup_e:
+            print(f"Cleanup error: {cleanup_e}")
 
 def _human_type(element, text):
     """Simulate human-like typing with random delays"""

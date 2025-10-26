@@ -1,54 +1,12 @@
 from fastapi import APIRouter, Request, Depends, Response, HTTPException
 from httpx import AsyncClient, RequestError
 from auth.session import get_authenticated_client, force_refresh_session, get_session_status
-from auth.selenium_login import manual_login_and_capture_cookies, load_manual_cookies, save_manual_cookies_direct
+from auth.selenium_login import manual_login_and_capture_cookies, load_manual_cookies
 from utils.helpers import filter_headers
 import os
 import asyncio
-import json
 
 router = APIRouter()
-
-@router.post("/set-cookies-direct")
-async def set_cookies_direct(request: Request):
-    """
-    Endpoint to set cookies directly from manual input
-    Expects JSON with cookies dict: {"cookie_name": "cookie_value", ...}
-    """
-    try:
-        cookies_data = await request.json()
-        
-        if not isinstance(cookies_data, dict):
-            return {
-                "status": "error", 
-                "message": "Invalid format. Expected JSON object with cookie names and values"
-            }
-        
-        print(f"🍪 Received {len(cookies_data)} cookies to set directly")
-        
-        # Save the cookies
-        success = save_manual_cookies_direct(cookies_data)
-        
-        if success:
-            # Force refresh the session to use new cookies
-            await force_refresh_session()
-            
-            return {
-                "status": "success",
-                "message": f"Successfully set {len(cookies_data)} cookies and refreshed session",
-                "cookie_names": list(cookies_data.keys())
-            }
-        else:
-            return {
-                "status": "error",
-                "message": "Failed to save cookies"
-            }
-            
-    except Exception as e:
-        return {
-            "status": "error", 
-            "message": f"Failed to set cookies: {str(e)}"
-        }
 
 @router.get("/manual-login")
 async def manual_login_endpoint():

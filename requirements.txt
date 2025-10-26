@@ -4,3 +4,4 @@ httpx
 structlog
 boto3
 python-dotenv
+selenium

@@ -1,4 +1,5 @@
 import structlog
+import logging
 from datetime import datetime
 
 # Configure structlog
@@ -49,4 +50,3 @@ def log_error(error_type: str, message: str, **kwargs):
         timestamp=datetime.utcnow().isoformat(),
         **kwargs
     )
-    

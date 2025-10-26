@@ -13,6 +13,54 @@ import json
 import signal
 import random
 
+def save_manual_cookies_direct(cookies_dict, source_url="https://app.stealthwriter.ai"):
+    """
+    Save cookies directly from manual input (like from browser dev tools)
+    """
+    try:
+        cookies = []
+        for name, value in cookies_dict.items():
+            cookie_obj = {
+                'name': name,
+                'value': value,
+                'domain': '.stealthwriter.ai',
+                'path': '/',
+                'secure': True,
+                'httpOnly': False,  # We don't know this for sure
+                'sameSite': 'Lax'
+            }
+            
+            # Set specific properties based on cookie name patterns
+            if name.startswith('__Secure-'):
+                cookie_obj['secure'] = True
+            if 'session' in name.lower() or 'auth' in name.lower():
+                cookie_obj['httpOnly'] = True  # Likely httpOnly
+                
+            cookies.append(cookie_obj)
+        
+        cookies_data = {
+            "timestamp": time.time(),
+            "url": source_url,
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "cookies": cookies
+        }
+        
+        cookies_file = "manual_login_cookies.json"
+        with open(cookies_file, "w") as f:
+            json.dump(cookies_data, f, indent=2)
+        
+        print(f"💾 Saved {len(cookies)} cookies to {cookies_file}")
+        
+        # Log cookie names for verification
+        cookie_names = [cookie['name'] for cookie in cookies]
+        print(f"🏷️  Cookie names saved: {cookie_names}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to save manual cookies: {e}")
+        return False
+
 def manual_login_and_capture_cookies():
     """
     Opens a browser window for manual login and captures cookies after successful login

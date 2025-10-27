@@ -5,8 +5,6 @@ import os
 import asyncio
 import time
 import json
-import random
-import base64
 
 router = APIRouter()
 
@@ -76,30 +74,26 @@ def handle_403_response(target_url: str) -> Response:
             <div class="error">
                 <h3>❌ Access Blocked</h3>
                 <p><strong>Cloudflare is blocking access to the StealthWriter dashboard.</strong></p>
-                <p>Your cookies appear to be valid, but Cloudflare is detecting automated access.</p>
+                <p>The manual cookies may need to be refreshed or may be detected as automated.</p>
                 <p><strong>Target URL:</strong> {target_url}</p>
             </div>
             
             <div class="solution">
-                <h3>🔧 Solutions</h3>
-                <p><strong>1. Get fresh browser session cookies:</strong></p>
+                <h3>🔧 Solution: Get Fresh Session</h3>
+                <p><strong>Manual steps to get working cookies:</strong></p>
                 <ol>
-                    <li>Open StealthWriter.ai in a fresh browser window</li>
-                    <li>Log in and reach the dashboard</li>
-                    <li>Wait 30 seconds on the dashboard page</li>
-                    <li>Export fresh cookies including Cloudflare protection cookies</li>
+                    <li>Open a fresh browser window/incognito mode</li>
+                    <li>Go to StealthWriter.ai and log in normally</li>
+                    <li>Stay on the dashboard page for 1-2 minutes</li>
+                    <li>Export cookies using a browser extension (Cookie Editor, etc.)</li>
                     <li>Update your manual_cookies.json file</li>
+                    <li>Restart this proxy server</li>
                 </ol>
                 
-                <p><strong>2. Try automated cookie refresh:</strong></p>
+                <p><strong>Try automated login (if display available):</strong></p>
                 <div class="code">
-                    <button onclick="getCookies()">🍪 Get Fresh Cookies</button>
+                    <button onclick="getCookies()">🍪 Automated Login</button>
                     <button onclick="refreshSession()">🔄 Refresh Session</button>
-                </div>
-                
-                <p><strong>3. Check session status:</strong></p>
-                <div class="code">
-                    <button onclick="checkStatus()">📊 Check Status</button>
                 </div>
             </div>
             
@@ -109,16 +103,16 @@ def handle_403_response(target_url: str) -> Response:
         <script>
             async function getCookies() {{
                 const result = document.getElementById('result');
-                result.innerHTML = '<p>🔄 Starting automated cookie capture...</p>';
+                result.innerHTML = '<p>🔄 Starting automated login...</p>';
                 
                 try {{
                     const response = await fetch('/manual-login');
                     const data = await response.json();
                     
                     if (data.status === 'success') {{
-                        result.innerHTML = '<div class="solution"><p>✅ Fresh cookies captured! <a href="/dashboard">Try accessing dashboard again</a></p></div>';
+                        result.innerHTML = '<div class="solution"><p>✅ Fresh cookies captured! Please restart the server.</p></div>';
                     }} else {{
-                        result.innerHTML = '<div class="error"><p>❌ Cookie capture failed: ' + data.message + '</p></div>';
+                        result.innerHTML = '<div class="error"><p>❌ Login failed: ' + data.message + '</p></div>';
                     }}
                 }} catch (e) {{
                     result.innerHTML = '<div class="error"><p>❌ Error: ' + e.message + '</p></div>';
@@ -134,24 +128,10 @@ def handle_403_response(target_url: str) -> Response:
                     const data = await response.json();
                     
                     if (data.status === 'success') {{
-                        result.innerHTML = '<div class="solution"><p>✅ Session refreshed! <a href="/dashboard">Try accessing dashboard again</a></p></div>';
+                        result.innerHTML = '<div class="solution"><p>✅ Session refreshed! Try again.</p></div>';
                     }} else {{
                         result.innerHTML = '<div class="error"><p>❌ Refresh failed: ' + data.message + '</p></div>';
                     }}
-                }} catch (e) {{
-                    result.innerHTML = '<div class="error"><p>❌ Error: ' + e.message + '</p></div>';
-                }}
-            }}
-            
-            async function checkStatus() {{
-                const result = document.getElementById('result');
-                result.innerHTML = '<p>📊 Checking status...</p>';
-                
-                try {{
-                    const response = await fetch('/session-status');
-                    const data = await response.json();
-                    
-                    result.innerHTML = '<div class="code"><pre>' + JSON.stringify(data, null, 2) + '</pre></div>';
                 }} catch (e) {{
                     result.innerHTML = '<div class="error"><p>❌ Error: ' + e.message + '</p></div>';
                 }}
@@ -162,59 +142,9 @@ def handle_403_response(target_url: str) -> Response:
     """
     return Response(content=error_html, status_code=403, headers={"Content-Type": "text/html"})
 
-async def multi_step_request(client, method: str, target_url: str, headers: dict, body: bytes = None, params=None):
-    """Multi-step request strategy to bypass Cloudflare"""
-    
-    # Step 1: Try direct request
-    try:
-        response = await client.request(method, target_url, headers=headers, content=body, params=params)
-        if response.status_code != 403:
-            return response
-    except Exception as e:
-        print(f"⚠️ Direct request failed: {e}")
-    
-    # Step 2: Add delay and retry with different headers
-    await asyncio.sleep(random.uniform(1, 3))
-    
-    enhanced_headers = headers.copy()
-    enhanced_headers.update({
-        "CF-Connecting-IP": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}",
-        "CF-IPCountry": random.choice(["US", "CA", "GB", "DE", "FR"]),
-        "X-Real-IP": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}",
-        "Via": "1.1 cloudflare",
-        "CF-Visitor": '{"scheme":"https"}',
-    })
-    
-    try:
-        response = await client.request(method, target_url, headers=enhanced_headers, content=body, params=params)
-        if response.status_code != 403:
-            return response
-    except Exception as e:
-        print(f"⚠️ Enhanced request failed: {e}")
-    
-    # Step 3: Final attempt with minimal headers
-    minimal_headers = {
-        "User-Agent": headers["User-Agent"],
-        "Accept": headers.get("Accept", "*/*"),
-        "Referer": "https://app.stealthwriter.ai/",
-        "Origin": "https://app.stealthwriter.ai"
-    }
-    
-    try:
-        response = await client.request(method, target_url, headers=minimal_headers, content=body, params=params)
-        return response
-    except Exception as e:
-        print(f"⚠️ Minimal request failed: {e}")
-        # Return a 403 response if all attempts fail
-        return type('Response', (), {
-            'status_code': 403,
-            'content': b'Cloudflare protection active',
-            'headers': {}
-        })()
-
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_request(path: str, request: Request):
-    """Main proxy endpoint with enhanced Cloudflare bypass"""
+    """Main proxy endpoint - simplified approach"""
     try:
         # Check session status
         session_status = await get_session_status()
@@ -239,65 +169,46 @@ async def proxy_request(path: str, request: Request):
             query_string = str(request.query_params)
             target_url += f"?{query_string}"
 
-        # Enhanced headers with better Cloudflare compatibility
+        # Simple headers for better compatibility
         content_type = get_content_type(target_url)
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
             "Referer": "https://app.stealthwriter.ai/dashboard",
             "Origin": "https://app.stealthwriter.ai",
-            "sec-ch-ua": '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
             "Sec-Fetch-Site": "same-origin",
-            "DNT": "1",
-            "Connection": "keep-alive"
+            "DNT": "1"
         }
         
-        # Set specific headers based on content type
+        # Set Accept header based on content type
         if content_type == 'text/css':
             headers["Accept"] = "text/css,*/*;q=0.1"
-            headers["Sec-Fetch-Dest"] = "style"
-            headers["Sec-Fetch-Mode"] = "no-cors"
         elif content_type == 'application/javascript':
             headers["Accept"] = "*/*"
-            headers["Sec-Fetch-Dest"] = "script"
-            headers["Sec-Fetch-Mode"] = "no-cors"
-        elif content_type.startswith('font/'):
-            headers["Accept"] = "*/*"
-            headers["Sec-Fetch-Dest"] = "font"
-            headers["Sec-Fetch-Mode"] = "cors"
         elif content_type.startswith('image/'):
             headers["Accept"] = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-            headers["Sec-Fetch-Dest"] = "image"
-            headers["Sec-Fetch-Mode"] = "no-cors"
         else:
             headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-            headers["Sec-Fetch-Dest"] = "document"
-            headers["Sec-Fetch-Mode"] = "navigate"
-            headers["Sec-Fetch-User"] = "?1"
-            headers["Upgrade-Insecure-Requests"] = "1"
 
         body = await request.body()
         
-        # Use multi-step request strategy
-        response = await multi_step_request(
-            client, request.method, target_url, headers, body, request.query_params
+        # Single request attempt
+        response = await client.request(
+            request.method,
+            target_url,
+            headers=headers,
+            content=body,
+            params=request.query_params
         )
         
         # Handle 403 Forbidden responses
         if response.status_code == 403:
             print(f"🛡️ Cloudflare 403 detected for: {target_url}")
-            # Only show error page for HTML requests, pass through assets
+            # Only show error page for HTML requests
             if content_type == 'text/html':
                 return handle_403_response(target_url)
-            else:
-                # For assets, try to pass through the response
-                print(f"⚠️ Asset blocked but passing through: {target_url}")
         
         filtered_headers = clean_headers(response.headers)
         

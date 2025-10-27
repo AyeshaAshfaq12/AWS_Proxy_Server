@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-httpx[http2]
+httpx==0.24.1
 structlog
 python-dotenv
 selenium

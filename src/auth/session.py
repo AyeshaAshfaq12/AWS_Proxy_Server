@@ -4,6 +4,8 @@ import asyncio
 import time
 import json
 import random
+import hashlib
+import base64
 
 _master_client = None
 _master_client_lock = asyncio.Lock()
@@ -13,6 +15,24 @@ _session_timeout = int(os.getenv("SESSION_TIMEOUT", 3600))
 # Fix: Go up 3 levels from src/auth/session.py to get to project root
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COOKIES_FILE = os.path.join(PROJECT_ROOT, "manual_cookies.json")
+
+def generate_cf_ray():
+    """Generate a fake Cloudflare Ray ID"""
+    return f"{random.randint(10**15, 10**16-1):x}-{random.choice(['DFW', 'LAX', 'ORD', 'JFK', 'ATL'])}"
+
+def generate_browser_fingerprint():
+    """Generate browser fingerprint headers"""
+    return {
+        "sec-ch-ua": '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-ch-ua-platform-version": '"15.0.0"',
+        "sec-ch-ua-arch": '"x86"',
+        "sec-ch-ua-bitness": '"64"',
+        "sec-ch-ua-model": '""',
+        "sec-ch-ua-full-version": '"119.0.6045.199"',
+        "sec-ch-ua-full-version-list": '"Google Chrome";v="119.0.6045.199", "Chromium";v="119.0.6045.199", "Not?A_Brand";v="24.0.0.0"'
+    }
 
 def load_manual_cookies():
     """
@@ -81,52 +101,65 @@ async def _refresh_session():
             await _master_client.aclose()
             _master_client = None
 
-        print("🔄 Refreshing session with enhanced anti-detection...")
+        print("🔄 Refreshing session with enhanced Cloudflare bypass...")
         cookie_status = load_manual_cookies()
         if not cookie_status["exists"] or cookie_status["expired"] or not cookie_status["cookies"]:
             raise Exception(cookie_status.get("error") or "No valid manual cookies available")
 
         cookie_dict = {cookie['name']: cookie['value'] for cookie in cookie_status["cookies"]}
         
-        # Enhanced headers with randomization and better fingerprinting
-        user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ]
+        # Add Cloudflare-specific cookies to bypass detection
+        cf_cookies = {
+            "__cf_bm": base64.b64encode(f"cf_{int(time.time())}_{random.randint(1000,9999)}".encode()).decode()[:64],
+            "_cfuvid": f"{random.randint(10**20, 10**21-1):x}",
+        }
+        cookie_dict.update(cf_cookies)
+        
+        # Enhanced headers with better fingerprinting
+        fingerprint = generate_browser_fingerprint()
         
         headers = {
-            "User-Agent": random.choice(user_agents),
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-User": "?1",
+            "Sec-Fetch-Dest": "document",
+            "Upgrade-Insecure-Requests": "1",
             "DNT": "1",
             "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-User": "?1",
-            "Cache-Control": "max-age=0",
-            "Pragma": "no-cache",
-            "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
-            "Referer": "https://app.stealthwriter.ai/"
+            "CF-RAY": generate_cf_ray(),
+            "CF-Visitor": '{"scheme":"https"}',
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}",
+            **fingerprint
         }
 
-        # Create client with enhanced settings
+        # Create client with enhanced settings and better transport
+        transport = httpx.HTTPTransport(
+            http2=True,
+            limits=httpx.Limits(
+                max_keepalive_connections=20,
+                max_connections=100,
+                keepalive_expiry=30.0
+            ),
+            retries=3
+        )
+
         _master_client = httpx.AsyncClient(
             cookies=cookie_dict,
             headers=headers,
             follow_redirects=True,
-            timeout=30.0,
-            http2=True,
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            transport=transport,
             verify=True
         )
 
-        print("✅ Enhanced session created with anti-detection measures")
+        print("✅ Enhanced session created with Cloudflare bypass measures")
             
     except Exception as e:
         print(f"❌ Session refresh failed: {str(e)}")

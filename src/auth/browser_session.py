@@ -102,9 +102,18 @@ class BrowserSession:
                 print("❌ No cookies found in file")
                 return False
             
-            # Convert cookies to Playwright format
+            # Convert cookies to Playwright format and fix sameSite values
             playwright_cookies = []
             for cookie in cookies:
+                # Fix sameSite value - capitalize first letter
+                same_site = cookie.get('sameSite', 'Lax')
+                if same_site.lower() == 'lax':
+                    same_site = 'Lax'
+                elif same_site.lower() == 'strict':
+                    same_site = 'Strict'
+                elif same_site.lower() == 'none':
+                    same_site = 'None'
+                
                 playwright_cookie = {
                     'name': cookie['name'],
                     'value': cookie['value'],
@@ -112,7 +121,7 @@ class BrowserSession:
                     'path': cookie.get('path', '/'),
                     'secure': cookie.get('secure', True),
                     'httpOnly': cookie.get('httpOnly', False),
-                    'sameSite': cookie.get('sameSite', 'Lax')
+                    'sameSite': same_site
                 }
                 
                 if 'expirationDate' in cookie:
@@ -136,24 +145,26 @@ class BrowserSession:
             
             self._last_activity = time.time()
             
-            # Navigate to page
-            response = await self.page.goto(url, wait_until='networkidle', timeout=30000)
+            # Navigate to page with longer timeout and different wait strategy
+            response = await self.page.goto(
+                url, 
+                wait_until='domcontentloaded',  # Changed from 'networkidle' to 'domcontentloaded'
+                timeout=60000  # Increased timeout to 60 seconds
+            )
             
             # Wait a bit for any dynamic content
-            await asyncio.sleep(1)
-            
-            # Get page content
-            content = await self.page.content()
+            await asyncio.sleep(2)
             
             # Check for Cloudflare challenge
-            if "challenge-platform" in content.lower() or "checking your browser" in content.lower():
+            page_content = await self.page.content()
+            if "challenge-platform" in page_content.lower() or "checking your browser" in page_content.lower():
                 print("⚠️ Cloudflare challenge detected, waiting...")
-                await asyncio.sleep(5)  # Wait for challenge to complete
-                content = await self.page.content()
+                await asyncio.sleep(10)  # Wait longer for challenge to complete
+                page_content = await self.page.content()
             
             return {
-                'status_code': response.status,
-                'content': content,
+                'status_code': response.status if response else 200,
+                'content': page_content,
                 'url': self.page.url,
                 'headers': dict(response.headers) if response else {}
             }
@@ -274,4 +285,3 @@ async def refresh_browser_session():
         await _browser_session.start()
         await _browser_session.load_cookies()
         return _browser_session
-        

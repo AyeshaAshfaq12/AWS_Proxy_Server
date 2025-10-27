@@ -1,5 +1,5 @@
 {
-  "timestamp": 1730028000,
+  "timestamp": 1730050000,
   "url": "https://app.stealthwriter.ai/dashboard",
   "cookies": [
     {
@@ -9,7 +9,7 @@
       "httpOnly": true,
       "name": "__Secure-better-auth.session_token",
       "path": "/",
-      "sameSite": "lax",
+      "sameSite": "Lax",
       "secure": true,
       "session": false,
       "storeId": null,
@@ -22,7 +22,7 @@
       "httpOnly": true,
       "name": "__Secure-better-auth.session_data",
       "path": "/",
-      "sameSite": "lax",
+      "sameSite": "Lax",
       "secure": true,
       "session": false,
       "storeId": null,

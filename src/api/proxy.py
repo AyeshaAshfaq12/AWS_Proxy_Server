@@ -154,24 +154,33 @@ async def browser_proxy(path: str, request: Request):
         else:
             print(f"⚠️ Browser proxy returned {result['status_code']}: {target_url}")
         
-        # Filter response headers
+        # Filter response headers - fix for illegal header values
         filtered_headers = {}
         for k, v in result.get('headers', {}).items():
-            if k.lower() not in ["content-encoding", "transfer-encoding", "connection", "content-length", "server"]:
-                filtered_headers[k] = v
+            # Skip problematic headers
+            if k.lower() in ["content-encoding", "transfer-encoding", "connection", "content-length", "server"]:
+                continue
+            
+            # Fix header values that contain newlines or invalid characters
+            if isinstance(v, str):
+                # Remove newlines and other problematic characters
+                clean_value = v.replace('\n', ' ').replace('\r', ' ').strip()
+                # Skip headers with invalid characters
+                if clean_value and len(clean_value) < 8192:  # Reasonable header length limit
+                    filtered_headers[k] = clean_value
         
-        # Add CORS headers for browser compatibility
+        # Add safe CORS headers for browser compatibility
         filtered_headers.update({
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "*"
+            "Access-Control-Allow-Headers": "*",
+            "Content-Type": "text/html; charset=utf-8"
         })
         
         return Response(
             content=result['content'],
             status_code=result['status_code'],
-            headers=filtered_headers,
-            media_type="text/html"
+            headers=filtered_headers
         )
         
     except Exception as e:

@@ -7,7 +7,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from api.proxy import router
-from auth.selenium_login import get_manual_cookie_status
+from auth.selenium_login import load_manual_cookies
 import json
 
 app = FastAPI(
@@ -25,7 +25,7 @@ async def root():
     """
     # Get cookie status without triggering authentication
     try:
-        cookie_status = get_manual_cookie_status()
+        cookie_status = load_manual_cookies()
     except Exception as e:
         cookie_status = {"exists": False, "error": str(e)}
     
@@ -234,7 +234,7 @@ curl http://your-server:8000/any-path-here
 async def health_check():
     """Health check endpoint - No authentication required"""
     try:
-        cookie_status = get_manual_cookie_status()
+        cookie_status = load_manual_cookies()
     except Exception as e:
         cookie_status = {"exists": False, "error": str(e)}
     

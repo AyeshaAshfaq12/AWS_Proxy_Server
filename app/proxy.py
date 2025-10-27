@@ -54,6 +54,11 @@ def rewrite_html_links(html: str, target_base: str, proxy_base: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     # attributes that contain URLs
     url_attrs = ["href", "src", "action", "data-src", "data-href"]
+    
+    # Extract domain from URLs for protocol-relative matching
+    target_domain = target_base.replace("https://", "").replace("http://", "")
+    proxy_domain = proxy_base.replace("https://", "").replace("http://", "")
+    
     for tag in soup.find_all(True):
         for attr in url_attrs:
             val = tag.get(attr)
@@ -64,10 +69,15 @@ def rewrite_html_links(html: str, target_base: str, proxy_base: str) -> str:
                 # replace target base with proxy base
                 new = val.replace(target_base, proxy_base)
                 tag[attr] = new
-            elif val.startswith("//" + target_base.replace("https://", "").replace("http://", "")):
+            elif val.startswith("//" + target_domain):
                 # handle protocol-relative
-                tag[attr] = val.replace("//" + target_base.replace("https://", "").replace("http://", ""), proxy_base.replace("https://", "").replace("http://", ""))
+                tag[attr] = val.replace("//" + target_domain, proxy_domain)
     return str(soup)
+
+
+def _extract_domain(url: str) -> str:
+    """Extract domain from URL by removing protocol and path."""
+    return url.replace("https://", "").replace("http://", "").split("/")[0]
 
 
 class ProxyClient:
@@ -82,13 +92,9 @@ class ProxyClient:
         # Clear then set
         jar = httpx.Cookies()
         for k, v in cookies.items():
-            jar.set(k, v, domain=self._domain_from_target(), path="/")
-        # assign cookies to client
-        self._client._cookies = jar
-    
-    def _domain_from_target(self) -> str:
-        # target like https://stealthwriter.ai -> domain stealthwriter.ai
-        return self.target.replace("https://", "").replace("http://", "").split("/")[0]
+            jar.set(k, v, domain=_extract_domain(self.target), path="/")
+        # assign cookies to client using public API
+        self._client.cookies = jar
 
     async def proxy_request(self, request: Request, path: str):
         method = request.method

@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -8,7 +9,7 @@ from .proxy import ProxyClient
 app = FastAPI(title="StealthWriter Single-Session Proxy")
 
 # global proxy client (set at startup)
-proxy_client: ProxyClient | None = None
+proxy_client: Optional[ProxyClient] = None
 
 @app.on_event("startup")
 async def startup_event():

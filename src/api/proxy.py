@@ -8,6 +8,9 @@ import json
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 router = APIRouter()
 
@@ -148,7 +151,7 @@ def handle_403_response(target_url: str) -> Response:
 def fetch_html_with_selenium(url: str, cookies: list) -> str:
     """Use Selenium to fetch HTML content with real browser and cookies"""
     options = Options()
-    options.add_argument("--headless=new")
+    # Do NOT use headless mode
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -156,10 +159,17 @@ def fetch_html_with_selenium(url: str, cookies: list) -> str:
     driver = webdriver.Chrome(options=options)
     driver.get("https://app.stealthwriter.ai/")
     for cookie in cookies:
-        # Selenium expects cookie dict keys: name, value, domain, path, etc.
+        # Selenium expects cookie dict keys: name, value, domain, path, secure, httpOnly, expiry
         cookie_dict = {k: v for k, v in cookie.items() if k in ["name", "value", "domain", "path", "secure", "httpOnly", "expiry"]}
         driver.add_cookie(cookie_dict)
     driver.get(url)
+    try:
+        # Wait up to 30 seconds for dashboard sidebar to appear
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, '[data-slot="sidebar-wrapper"]'))
+        )
+    except Exception:
+        time.sleep(10)  # fallback wait
     html = driver.page_source
     driver.quit()
     return html

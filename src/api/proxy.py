@@ -13,6 +13,10 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+import subprocess
+import tempfile
+import shutil
 
 router = APIRouter()
 
@@ -29,7 +33,7 @@ def get_content_type(url: str) -> str:
         return 'application/javascript'
     elif url.endswith('.woff') or url.endswith('.woff2'):
         return 'font/woff2'
-    elif url.endsWith('.ttf'):
+    elif url.endswith('.ttf'):
         return 'font/ttf'
     elif url.endswith('.svg'):
         return 'image/svg+xml'
@@ -86,52 +90,22 @@ def handle_403_response(target_url: str) -> Response:
             
             <div class="error">
                 <h3>❌ Access Blocked</h3>
-                <p><strong>Cloudflare is blocking access to the StealthWriter dashboard.</strong></p>
-                <p>The manual cookies may need to be refreshed or may be detected as automated.</p>
+                <p><strong>The target website is blocking automated access.</strong></p>
+                <p>Please update your cookies manually or use the refresh endpoint.</p>
                 <p><strong>Target URL:</strong> {target_url}</p>
             </div>
             
             <div class="solution">
-                <h3>🔧 Solution: Get Fresh Session</h3>
-                <p><strong>Manual steps to get working cookies:</strong></p>
-                <ol>
-                    <li>Open a fresh browser window/incognito mode</li>
-                    <li>Go to StealthWriter.ai and log in normally</li>
-                    <li>Stay on the dashboard page for 1-2 minutes</li>
-                    <li>Export cookies using a browser extension (Cookie Editor, etc.)</li>
-                    <li>Update your manual_cookies.json file</li>
-                    <li>Restart this proxy server</li>
-                </ol>
-                
-                <p><strong>Try automated login (if display available):</strong></p>
-                <div class="code">
-                    <button onclick="getCookies()">🍪 Automated Login</button>
-                    <button onclick="refreshSession()">🔄 Refresh Session</button>
-                </div>
+                <h3>🔧 Solutions</h3>
+                <button onclick="refreshSession()">🔄 Refresh Session</button>
+                <button onclick="updateCookies()">🍪 Update Cookies</button>
+                <button onclick="checkStatus()">📊 Check Status</button>
             </div>
             
             <div id="result" style="margin-top: 20px;"></div>
         </div>
         
         <script>
-            async function getCookies() {{
-                const result = document.getElementById('result');
-                result.innerHTML = '<p>🔄 Starting automated login...</p>';
-                
-                try {{
-                    const response = await fetch('/manual-login');
-                    const data = await response.json();
-                    
-                    if (data.status === 'success') {{
-                        result.innerHTML = '<div class="solution"><p>✅ Fresh cookies captured! Please restart the server.</p></div>';
-                    }} else {{
-                        result.innerHTML = '<div class="error"><p>❌ Login failed: ' + data.message + '</p></div>';
-                    }}
-                }} catch (e) {{
-                    result.innerHTML = '<div class="error"><p>❌ Error: ' + e.message + '</p></div>';
-                }}
-            }}
-            
             async function refreshSession() {{
                 const result = document.getElementById('result');
                 result.innerHTML = '<p>🔄 Refreshing session...</p>';
@@ -142,12 +116,30 @@ def handle_403_response(target_url: str) -> Response:
                     
                     if (data.status === 'success') {{
                         result.innerHTML = '<div class="solution"><p>✅ Session refreshed! Try again.</p></div>';
+                        setTimeout(() => window.location.reload(), 2000);
                     }} else {{
                         result.innerHTML = '<div class="error"><p>❌ Refresh failed: ' + data.message + '</p></div>';
                     }}
                 }} catch (e) {{
                     result.innerHTML = '<div class="error"><p>❌ Error: ' + e.message + '</p></div>';
                 }}
+            }}
+            
+            async function checkStatus() {{
+                const result = document.getElementById('result');
+                result.innerHTML = '<p>🔍 Checking status...</p>';
+                
+                try {{
+                    const response = await fetch('/session-status');
+                    const data = await response.json();
+                    result.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                }} catch (e) {{
+                    result.innerHTML = '<div class="error"><p>❌ Error: ' + e.message + '</p></div>';
+                }}
+            }}
+            
+            function updateCookies() {{
+                alert('Please update the manual_cookies.json file with fresh cookies from your browser, then refresh the session.');
             }}
         </script>
     </body>
@@ -179,141 +171,149 @@ async def cache_html(url: str, html: str):
         }
         print(f"💾 Cached response for: {url}")
 
-def fetch_html_with_selenium(url: str, cookies: list) -> str:
-    """Use Selenium to fetch HTML content with real browser and cookies - FIXED VERSION"""
+def setup_chrome_for_ec2():
+    """Setup Chrome options optimized for EC2 Linux environment"""
     options = Options()
     
-    # Essential options for server environment
-    options.add_argument("--headless=new")  # Use new headless mode
+    # Essential headless options for EC2
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--disable-background-timer-throttling")
-    options.add_argument("--disable-backgrounding-occluded-windows")
-    options.add_argument("--disable-renderer-backgrounding")
-    options.add_argument("--disable-features=TranslateUI")
-    options.add_argument("--disable-ipc-flooding-protection")
-    options.add_argument("--window-size=1920,1080")
     
     # Memory and performance optimizations
     options.add_argument("--memory-pressure-off")
-    options.add_argument("--max_old_space_size=4096")
+    options.add_argument("--max_old_space_size=2048")
     options.add_argument("--aggressive-cache-discard")
+    options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-backgrounding-occluded-windows")
+    options.add_argument("--disable-renderer-backgrounding")
     
-    # Network and security
+    # Disable unnecessary features
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-images")
+    options.add_argument("--disable-javascript")  # We don't need JS for basic HTML
     options.add_argument("--disable-web-security")
-    options.add_argument("--disable-features=VizDisplayCompositor")
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--ignore-ssl-errors")
-    options.add_argument("--ignore-certificate-errors-spki-list")
+    options.add_argument("--disable-features=TranslateUI,BlinkGenPropertyTrees")
+    options.add_argument("--disable-ipc-flooding-protection")
     
-    # User agent and automation detection bypass
+    # Network optimizations
+    options.add_argument("--aggressive-cache-discard")
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-sync")
+    
+    # Window size
+    options.add_argument("--window-size=1280,720")
+    
+    # User agent
+    options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
+    
+    # Disable automation detection
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
     
-    # Allow JavaScript (needed for Cloudflare)
-    # DO NOT disable JavaScript - it's required for Cloudflare challenges
+    # Create temp directory for user data
+    temp_dir = tempfile.mkdtemp(prefix="chrome_", suffix="_proxy")
+    options.add_argument(f"--user-data-dir={temp_dir}")
     
-    driver = webdriver.Chrome(options=options)
+    return options, temp_dir
+
+def fetch_html_with_selenium(url: str, cookies: list) -> str:
+    """Use Selenium to fetch HTML content - OPTIMIZED FOR EC2"""
+    options, temp_dir = setup_chrome_for_ec2()
     
-    # Increased timeouts for better reliability
-    driver.set_page_load_timeout(30)
-    driver.implicitly_wait(10)
+    # Try to find Chrome binary
+    chrome_binary = None
+    possible_paths = [
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+        "/opt/google/chrome/chrome"
+    ]
     
+    for path in possible_paths:
+        if os.path.exists(path):
+            chrome_binary = path
+            break
+    
+    if chrome_binary:
+        options.binary_location = chrome_binary
+        print(f"🔍 Using Chrome binary: {chrome_binary}")
+    
+    driver = None
     try:
-        # Hide automation flags
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        driver.execute_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
-        driver.execute_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+        # Create service with minimal logging
+        service = Service(log_level=3)  # Only fatal errors
         
-        print(f"🌐 Loading StealthWriter homepage...")
+        # Reduced timeouts for faster failure
+        driver = webdriver.Chrome(service=service, options=options)
+        driver.set_page_load_timeout(15)  # Reduced from 30
+        driver.implicitly_wait(5)  # Reduced from 10
+        
+        print(f"🌐 Loading base URL...")
         driver.get("https://app.stealthwriter.ai/")
         
-        # Wait for page to load
-        time.sleep(3)
-        
+        # Quick cookie addition
         print(f"🍪 Adding {len(cookies)} cookies...")
-        for cookie in cookies:
-            cookie_dict = {k: v for k, v in cookie.items() if k in ["name", "value", "domain", "path", "secure", "httpOnly", "expiry"]}
+        for cookie in cookies[:10]:  # Limit to first 10 cookies
             try:
+                cookie_dict = {
+                    "name": cookie.get("name"),
+                    "value": cookie.get("value"),
+                    "domain": cookie.get("domain", "app.stealthwriter.ai"),
+                    "path": cookie.get("path", "/")
+                }
                 driver.add_cookie(cookie_dict)
             except Exception as e:
-                print(f"⚠️ Failed to add cookie {cookie.get('name', 'unknown')}: {e}")
+                print(f"⚠️ Cookie add failed: {e}")
                 continue
                 
         print(f"🎯 Navigating to target: {url}")
         driver.get(url)
         
-        # Wait for Cloudflare challenge to complete
-        print("⏳ Waiting for Cloudflare challenge...")
-        start_time = time.time()
-        max_wait = 45  # 45 seconds max wait
+        # Quick wait - no fancy detection
+        print("⏳ Waiting for page load...")
+        time.sleep(8)  # Simple wait instead of complex detection
         
-        while time.time() - start_time < max_wait:
-            current_url = driver.current_url
-            page_source = driver.page_source.lower()
-            
-            # Check if we're past the challenge
-            if ("verifying you are human" not in page_source and 
-                "challenge" not in page_source and
-                "cloudflare" not in page_source):
-                print("✅ Cloudflare challenge passed!")
-                break
-                
-            # Check for dashboard elements
-            try:
-                dashboard_element = driver.find_element(By.CSS_SELECTOR, '[data-slot="sidebar-wrapper"]')
-                if dashboard_element:
-                    print("✅ Dashboard loaded!")
-                    break
-            except:
-                pass
-                
-            print(f"⏳ Still waiting for challenge... ({int(time.time() - start_time)}s)")
-            time.sleep(2)
-        
-        # Additional wait for full page load
-        try:
-            WebDriverWait(driver, 15).until(
-                EC.any_of(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-slot="sidebar-wrapper"]')),
-                    EC.presence_of_element_located((By.TAG_NAME, "main")),
-                    EC.presence_of_element_located((By.ID, "root"))
-                )
-            )
-            print("✅ Page elements loaded!")
-        except Exception as e:
-            print(f"⚠️ Timeout waiting for elements, proceeding anyway: {e}")
-            time.sleep(5)  # Fallback wait
-            
         html = driver.page_source
         print(f"📄 Retrieved HTML ({len(html)} characters)")
+        
+        # Basic validation
+        if len(html) < 1000:
+            raise Exception(f"HTML too short ({len(html)} chars), likely failed")
+            
         return html
         
     except Exception as e:
         print(f"❌ Selenium error: {str(e)}")
-        raise
+        raise Exception(f"Selenium fetch failed: {str(e)}")
     finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+        # Cleanup temp directory
         try:
-            driver.quit()
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
         except:
             pass
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_request(path: str, request: Request):
-    """Main proxy endpoint with smart caching and fallback"""
+    """Main proxy endpoint with improved error handling"""
     try:
         # Check session status
         session_status = await get_session_status()
         cookie_status = session_status.get("cookie_status", {})
         
         if not cookie_status.get("exists") or cookie_status.get("expired", True):
-            raise HTTPException(
-                status_code=401,
-                detail=f"Session unavailable: {cookie_status.get('error', 'No valid cookies')}"
-            )
+            return handle_403_response("Session unavailable")
 
         # Handle root path
         if path == "" or path == "/":
@@ -328,7 +328,7 @@ async def proxy_request(path: str, request: Request):
 
         content_type = get_content_type(target_url)
         
-        # For HTML pages: Try cache first, then HTTPX, then Selenium as last resort
+        # For HTML pages: Try cache first, then HTTPX, fallback gracefully
         if content_type == "text/html":
             
             # 1. Check cache first
@@ -344,11 +344,11 @@ async def proxy_request(path: str, request: Request):
                     }
                 )
             
-            # 2. Try HTTPX first (faster)
+            # 2. Try HTTPX first (faster and more reliable)
             try:
                 client = await get_authenticated_client()
                 headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.9",
                     "Accept-Encoding": "gzip, deflate, br",
@@ -365,11 +365,15 @@ async def proxy_request(path: str, request: Request):
                     headers=headers,
                     content=body,
                     params=request.query_params,
-                    timeout=10  # Quick timeout
+                    timeout=15  # Reasonable timeout
                 )
                 
-                # If HTTPX succeeds and doesn't get Cloudflare challenge
-                if response.status_code == 200 and "Verifying you are human" not in response.text:
+                # If HTTPX succeeds and content looks good
+                if (response.status_code == 200 and 
+                    len(response.text) > 1000 and
+                    "Verifying you are human" not in response.text and
+                    "Cloudflare" not in response.text):
+                    
                     print(f"⚡ HTTPX success for: {target_url}")
                     await cache_html(target_url, response.text)
                     return Response(
@@ -382,18 +386,24 @@ async def proxy_request(path: str, request: Request):
                         }
                     )
                 else:
-                    print(f"🔄 HTTPX got challenge, falling back to Selenium for: {target_url}")
+                    print(f"🔄 HTTPX got challenge/error, status: {response.status_code}")
                     
             except Exception as e:
-                print(f"⚠️ HTTPX failed, using Selenium for: {target_url}")
+                print(f"⚠️ HTTPX failed: {str(e)}")
             
-            # 3. Fallback to Selenium (slower but more reliable)
+            # 3. Try Selenium as last resort (but with better error handling)
             try:
                 cookies = cookie_status.get("cookies", [])
-                print(f"🤖 Using Selenium for: {target_url}")
-                html = await asyncio.get_event_loop().run_in_executor(
-                    None, fetch_html_with_selenium, target_url, cookies
+                print(f"🤖 Attempting Selenium for: {target_url}")
+                
+                # Run in executor with timeout
+                html = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None, fetch_html_with_selenium, target_url, cookies
+                    ),
+                    timeout=45  # 45 second timeout for entire operation
                 )
+                
                 await cache_html(target_url, html)
                 return Response(
                     content=html,
@@ -404,6 +414,9 @@ async def proxy_request(path: str, request: Request):
                         "Cache-Control": "no-cache"
                     }
                 )
+            except asyncio.TimeoutError:
+                print(f"❌ Selenium timeout for: {target_url}")
+                return handle_403_response(target_url)
             except Exception as e:
                 print(f"❌ Selenium fetch failed: {str(e)}")
                 return handle_403_response(target_url)
@@ -412,7 +425,7 @@ async def proxy_request(path: str, request: Request):
         else:
             client = await get_authenticated_client()
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept-Encoding": "gzip, deflate, br",
                 "Referer": "https://app.stealthwriter.ai/dashboard",
@@ -435,7 +448,8 @@ async def proxy_request(path: str, request: Request):
                 target_url,
                 headers=headers,
                 content=body,
-                params=request.query_params
+                params=request.query_params,
+                timeout=30
             )
             
             filtered_headers = clean_headers(response.headers)
@@ -455,32 +469,7 @@ async def proxy_request(path: str, request: Request):
             
     except Exception as e:
         print(f"❌ Proxy error: {str(e)}")
-        return Response(
-            content=f"<html><body><h1>Proxy Error</h1><p>{str(e)}</p></body></html>",
-            status_code=500,
-            headers={"Content-Type": "text/html"}
-        )
-
-@router.get("/manual-login")
-async def manual_login_endpoint():
-    """Trigger manual login process"""
-    try:
-        print("🚀 Starting manual login process...")
-        cookies = await asyncio.get_event_loop().run_in_executor(None, manual_login_and_capture_cookies)
-        if cookies:
-            # Clear cache when getting new login
-            async with _cache_lock:
-                _html_cache.clear()
-            await force_refresh_session()
-            return {
-                "status": "success",
-                "message": f"Manual login completed. Captured {len(cookies)} cookies.",
-                "cookie_count": len(cookies)
-            }
-        else:
-            return {"status": "failed", "message": "Manual login failed - no cookies captured"}
-    except Exception as e:
-        return {"status": "error", "message": f"Manual login failed: {str(e)}"}
+        return handle_403_response(f"Proxy error: {str(e)}")
 
 @router.get("/session-status")
 async def session_status():

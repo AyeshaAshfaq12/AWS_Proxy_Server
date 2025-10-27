@@ -1,21 +1,34 @@
 from dotenv import load_dotenv
 import os
 
-# Load environment variables first
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+# Load environment variables
+load_dotenv()
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-from api.proxy import router
-from auth.session import load_manual_cookies
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+import uvicorn
+
+# Import routers
+from api.proxy import router as proxy_router
 
 app = FastAPI(
-    title="StealthWriter.ai Proxy Server",
-    description="Secure proxy server for StealthWriter.ai with session sharing",
+    title="StealthWriter Proxy Server",
+    description="A reverse proxy for sharing authenticated sessions",
     version="1.0.0"
 )
 
-app.include_router(router)
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include routers
+app.include_router(proxy_router)
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -77,14 +90,28 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    cookie_status = load_manual_cookies()
-    
     return {
         "status": "healthy",
-        "version": "1.0.0",
-        "manual_cookies": cookie_status,
-        "environment": {
-            "target_url": os.getenv("TARGET_URL"),
-            "session_timeout": os.getenv("SESSION_TIMEOUT", "3600")
-        }
+        "service": "StealthWriter Proxy",
+        "version": "1.0.0"
     }
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler"""
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "message": str(exc),
+            "path": str(request.url)
+        }
+    )
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8000)),
+        reload=False
+    )

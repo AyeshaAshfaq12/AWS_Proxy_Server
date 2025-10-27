@@ -5,3 +5,4 @@ structlog
 boto3
 python-dotenv
 selenium
+playwright

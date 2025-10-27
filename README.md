@@ -25,6 +25,7 @@ fastapi-reverse-proxy
 │       └── helpers.py   # Utility functions
 ├── requirements.txt      # Project dependencies
 ├── README.md             # Project documentation
+├── manual_cookies.json             # cookies file
 └── .env                  # Environment variables
 ```
 

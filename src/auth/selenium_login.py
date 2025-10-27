@@ -9,7 +9,9 @@ import uuid
 import subprocess
 import json
 import signal
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Fix: Go up 3 levels from src/auth/selenium_login.py to get to project root  
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COOKIES_FILE = os.path.join(PROJECT_ROOT, "manual_cookies.json")
 
 def manual_login_and_capture_cookies():
@@ -84,10 +86,10 @@ def manual_login_and_capture_cookies():
                 "url": current_url,
                 "cookies": valid_cookies
             }
-            cookies_file = "manual_cookies.json"
-            with open(cookies_file, "w") as f:
+            # Fix: Use COOKIES_FILE instead of hardcoded path
+            with open(COOKIES_FILE, "w") as f:
                 json.dump(cookies_data, f, indent=2)
-            print(f"💾 Cookies saved to {cookies_file}")
+            print(f"💾 Cookies saved to {COOKIES_FILE}")
             return valid_cookies
         else:
             print(f"❌ Login not detected. Current URL: {current_url}")
@@ -115,7 +117,7 @@ def load_manual_cookies():
     try:
         if not os.path.exists(COOKIES_FILE):
             return None
-        with open(cookies_file, "r") as f:
+        with open(COOKIES_FILE, "r") as f:  # Fix: Use COOKIES_FILE instead of cookies_file
             cookies_data = json.load(f)
         cookie_age = time.time() - cookies_data["timestamp"]
         max_age = 86400  # 24 hours

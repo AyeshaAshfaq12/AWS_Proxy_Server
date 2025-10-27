@@ -8,7 +8,9 @@ _master_client = None
 _master_client_lock = asyncio.Lock()
 _last_refresh = 0
 _session_timeout = int(os.getenv("SESSION_TIMEOUT", 3600))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Fix: Go up 3 levels from src/auth/session.py to get to project root
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COOKIES_FILE = os.path.join(PROJECT_ROOT, "manual_cookies.json")
 
 def load_manual_cookies():
@@ -25,8 +27,9 @@ def load_manual_cookies():
         "error": None
     }
     try:
+        print(f"🔍 Looking for cookies at: {COOKIES_FILE}")  # Debug log
         if not os.path.exists(COOKIES_FILE):
-            status["error"] = "manual_cookies.json file not found"
+            status["error"] = f"manual_cookies.json file not found at {COOKIES_FILE}"
             return status
 
         with open(COOKIES_FILE, "r") as f:

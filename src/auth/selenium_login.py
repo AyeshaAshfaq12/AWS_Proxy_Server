@@ -108,22 +108,37 @@ def manual_login_and_capture_cookies():
 
 def load_manual_cookies():
     """
-    Load cookies from manual_cookies.json file
+    Load cookies from manual_cookies.json file and return status dict for UI/health
     """
+    status = {
+        "exists": False,
+        "expired": True,
+        "count": 0,
+        "age_hours": None,
+        "url": None,
+        "cookies": [],
+        "error": None
+    }
     try:
         cookies_file = "manual_cookies.json"
         if not os.path.exists(cookies_file):
-            return None
+            status["error"] = "manual_cookies.json file not found"
+            return status
         with open(cookies_file, "r") as f:
             cookies_data = json.load(f)
         cookie_age = time.time() - cookies_data["timestamp"]
         max_age = 86400  # 24 hours
+        status["exists"] = True
+        status["count"] = len(cookies_data.get("cookies", []))
+        status["age_hours"] = cookie_age / 3600
+        status["url"] = cookies_data.get("url")
+        status["cookies"] = cookies_data.get("cookies", [])
         if cookie_age > max_age:
-            print(f"⏰ Manual cookies are {cookie_age/3600:.1f} hours old (max {max_age/3600} hours)")
-            return None
-        cookies = cookies_data["cookies"]
-        print(f"✅ Loaded {len(cookies)} manual cookies (age: {cookie_age/3600:.1f} hours)")
-        return cookies
+            status["expired"] = True
+            status["error"] = f"Manual cookies are {cookie_age/3600:.1f} hours old (max {max_age/3600} hours)"
+        else:
+            status["expired"] = False
+        return status
     except Exception as e:
-        print(f"❌ Failed to load manual cookies: {e}")
-        return None
+        status["error"] = f"Failed to load manual cookies: {e}"
+        return status

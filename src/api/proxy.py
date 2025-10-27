@@ -73,18 +73,26 @@ async def refresh_session():
         return {"status": "error", "message": f"Session refresh failed: {str(e)}"}
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def browser_proxy(path: str, request: Request, client: AsyncClient = Depends(get_authenticated_client)):
-    # Build the target URL
+async def browser_proxy(path: str, request: Request):
+    from auth.session import get_session_status, get_authenticated_client
+    # Check session status before proxying
+    session_status = await get_session_status()
+    cookie_status = session_status.get("cookie_status", {})
+    if not cookie_status.get("exists") or cookie_status.get("expired", True) or not cookie_status.get("cookies"):
+        raise HTTPException(
+            status_code=401,
+            detail=f"Proxy session unavailable: {cookie_status.get('error', 'No valid manual cookies available')}"
+        )
+
+    client = await get_authenticated_client()
     target_url = os.getenv("TARGET_URL").rstrip("/") + "/" + path
     if path == "":
         target_url = os.getenv("TARGET_URL")  # root path
 
-    # Prepare headers and body
     headers = filter_headers(dict(request.headers))
     body = await request.body()
 
     try:
-        # Forward the request to the target site
         response = await client.request(
             request.method,
             target_url,
@@ -92,8 +100,6 @@ async def browser_proxy(path: str, request: Request, client: AsyncClient = Depen
             content=body,
             params=request.query_params
         )
-
-        # Stream the response back to the browser
         return Response(
             content=response.content,
             status_code=response.status_code,
@@ -103,3 +109,4 @@ async def browser_proxy(path: str, request: Request, client: AsyncClient = Depen
         raise HTTPException(status_code=502, detail=f"Proxy Error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proxy Error: {str(e)}")
+    

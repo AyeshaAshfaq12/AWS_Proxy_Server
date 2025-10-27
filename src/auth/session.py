@@ -12,17 +12,25 @@ COOKIES_FILE = "manual_cookies.json"
 
 def load_manual_cookies():
     """
-    Load cookies from manual_cookies.json file (expects metadata object)
+    Load cookies from manual_cookies.json file and return status dict for UI/health
     """
+    status = {
+        "exists": False,
+        "expired": True,
+        "count": 0,
+        "age_hours": None,
+        "url": None,
+        "cookies": [],
+        "error": None
+    }
     try:
         if not os.path.exists(COOKIES_FILE):
-            print("❌ manual_cookies.json file not found")
-            return None
+            status["error"] = "manual_cookies.json file not found"
+            return status
 
         with open(COOKIES_FILE, "r") as f:
             cookies_data = json.load(f)
 
-        # If file is a list, wrap it in metadata
         if isinstance(cookies_data, list):
             cookies_data = {
                 "timestamp": time.time(),
@@ -33,17 +41,23 @@ def load_manual_cookies():
         cookie_age = time.time() - cookies_data.get("timestamp", time.time())
         max_age = 86400  # 24 hours
 
-        if cookie_age > max_age:
-            print(f"⏰ Manual cookies are {cookie_age/3600:.1f} hours old (max {max_age/3600} hours)")
-            return None
+        status["exists"] = True
+        status["count"] = len(cookies_data.get("cookies", []))
+        status["age_hours"] = cookie_age / 3600
+        status["url"] = cookies_data.get("url")
+        status["cookies"] = cookies_data.get("cookies", [])
 
-        cookies = cookies_data.get("cookies", [])
-        print(f"✅ Loaded {len(cookies)} manual cookies (age: {cookie_age/3600:.1f} hours)")
-        return cookies
+        if cookie_age > max_age:
+            status["expired"] = True
+            status["error"] = f"Manual cookies are {cookie_age/3600:.1f} hours old (max {max_age/3600} hours)"
+        else:
+            status["expired"] = False
+
+        return status
 
     except Exception as e:
-        print(f"❌ Failed to load manual cookies: {e}")
-        return None
+        status["error"] = f"Failed to load manual cookies: {e}"
+        return status
 
 async def get_authenticated_client():
     global _master_client, _last_refresh
@@ -62,11 +76,11 @@ async def _refresh_session():
             _master_client = None
 
         print("🔄 Refreshing session with manual cookies...")
-        cookies = load_manual_cookies()
-        if not cookies:
-            raise Exception("No valid manual cookies available")
+        cookie_status = load_manual_cookies()
+        if not cookie_status["exists"] or cookie_status["expired"] or not cookie_status["cookies"]:
+            raise Exception(cookie_status.get("error") or "No valid manual cookies available")
 
-        cookie_dict = {cookie['name']: cookie['value'] for cookie in cookies}
+        cookie_dict = {cookie['name']: cookie['value'] for cookie in cookie_status["cookies"]}
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -101,13 +115,15 @@ async def force_refresh_session():
 
 async def get_session_status():
     global _master_client, _last_refresh
+    cookie_status = load_manual_cookies()
     if _master_client is None:
-        return {"status": "no_session", "last_refresh": None}
+        return {"status": "no_session", "last_refresh": None, "cookie_status": cookie_status}
     age = time.time() - _last_refresh
     expires_in = _session_timeout - age
     return {
         "status": "active" if expires_in > 0 else "expired",
         "last_refresh": _last_refresh,
         "age_seconds": age,
-        "expires_in_seconds": max(0, expires_in)
+        "expires_in_seconds": max(0, expires_in),
+        "cookie_status": cookie_status
     }

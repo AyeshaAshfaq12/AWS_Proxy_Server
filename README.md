@@ -1,78 +1,16 @@
-# FastAPI Reverse Proxy
+# AWS_Proxy_Server — Single-session reverse proxy for stealthwriter.ai
 
-This project is a lightweight, open-source reverse proxy built using FastAPI. It allows a single authenticated session with a third-party website to be shared securely across a maximum of 10 client devices. 
+This repo runs a FastAPI reverse proxy that keeps a single authenticated session to stealthwriter.ai on the server and lets multiple clients share it.
 
-## Features
+Important:
+- Obtain cookies by logging into stealthwriter.ai manually in a browser and copy cookies into SESSION_COOKIE_STRING (or use the admin endpoint to set them at runtime).
+- Store API_KEY, ADMIN_API_KEY, and SESSION_COOKIE_STRING in AWS Secrets Manager in production, not in plaintext.
 
-- **Single Authenticated Session**: Supports sharing of one authenticated session across multiple devices.
-- **Secure Proxying**: Forwards requests to a target website while maintaining security and session integrity.
-- **AWS Integration**: Utilizes AWS SSM for secure storage and retrieval of API keys and credentials.
-- **Lightweight**: Built with FastAPI for high performance and low overhead.
+Run locally:
+- Fill .env (or export env vars) and run `uvicorn app.main:app --host 0.0.0.0 --port 8080`
 
-## Project Structure
+Admin API:
+- POST /admin/set_cookies with JSON {"cookie_string": "a=1; b=2"} and header x-admin-key to update cookies.
 
-```
-fastapi-reverse-proxy
-├── src
-│   ├── main.py          # Entry point of the FastAPI application
-│   ├── api
-│   │   └── proxy.py     # Core proxy logic
-│   ├── auth
-│   │   └── session.py   # Session authentication management
-│   ├── aws
-│   │   └── integration.py# AWS service interactions
-│   └── utils
-│       └── helpers.py   # Utility functions
-├── requirements.txt      # Project dependencies
-├── README.md             # Project documentation
-└── .env                  # Environment variables
-```
-
-## Setup Instructions
-
-1. Clone the repository:
-   ```
-   git clone <repository-url>
-   cd fastapi-reverse-proxy
-   ```
-
-2. Create a virtual environment and activate it:
-   ```
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   ```
-
-3. Install the required dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-
-4. Configure your environment variables in the `.env` file.
-
-5. Run the application:
-   ```
-   uvicorn src.main:app --reload
-   ```
-
-## Usage
-
-- Send a POST request to `/proxy/{path}` to forward requests to the target website.
-- Ensure that the API key is included in the headers for authentication.
-
-## Architecture
-
-The application is structured into several modules:
-
-- **Main Module**: Initializes the FastAPI application and sets up the necessary routes and middleware.
-- **API Module**: Contains the proxy logic that handles incoming requests and forwards them to the target website.
-- **Auth Module**: Manages session authentication and ensures that the client is authenticated before forwarding requests.
-- **AWS Module**: Interacts with AWS services to fetch necessary credentials securely.
-- **Utils Module**: Provides helper functions for logging and error handling.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a pull request or open an issue for any suggestions or improvements.
-
-## License
-
-This project is licensed under the MIT License. See the LICENSE file for more details.
+Security:
+- Put the app behind TLS and limit access. Do not expose the admin key publicly.

@@ -5,6 +5,7 @@ import os
 import asyncio
 import time
 import json
+import random
 
 router = APIRouter()
 
@@ -50,9 +51,99 @@ def clean_headers(headers: dict) -> dict:
     
     return filtered_headers
 
+def handle_403_response(target_url: str) -> Response:
+    """Handle Cloudflare 403 responses with helpful error page"""
+    error_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Session Refresh Required</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; background: #f8fafc; }}
+            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+            .error {{ background: #ffebee; padding: 20px; border-radius: 8px; border-left: 4px solid #f44336; margin: 15px 0; }}
+            .solution {{ background: #e8f5e8; padding: 20px; border-radius: 8px; border-left: 4px solid #4caf50; margin: 15px 0; }}
+            .code {{ background: #f5f5f5; padding: 10px; border-radius: 4px; font-family: monospace; margin: 10px 0; }}
+            button {{ background: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; margin: 10px 5px; }}
+            button:hover {{ background: #0056b3; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🛡️ Cloudflare Protection Detected</h1>
+            
+            <div class="error">
+                <h3>❌ Access Blocked</h3>
+                <p><strong>Cloudflare is blocking access to the StealthWriter dashboard.</strong></p>
+                <p>This usually means your authentication cookies have expired or are being rejected.</p>
+                <p><strong>Target URL:</strong> {target_url}</p>
+            </div>
+            
+            <div class="solution">
+                <h3>🔧 Quick Solutions</h3>
+                <p><strong>1. Refresh your session:</strong></p>
+                <div class="code">
+                    <button onclick="refreshSession()">🔄 Refresh Session</button>
+                </div>
+                
+                <p><strong>2. Get fresh cookies:</strong></p>
+                <ol>
+                    <li>Open StealthWriter.ai in your regular browser</li>
+                    <li>Log in successfully to reach the dashboard</li>
+                    <li>Export fresh cookies using a browser extension</li>
+                    <li>Update your manual_cookies.json file</li>
+                </ol>
+                
+                <p><strong>3. Check session status:</strong></p>
+                <div class="code">
+                    <button onclick="checkStatus()">📊 Check Status</button>
+                </div>
+            </div>
+            
+            <div id="result" style="margin-top: 20px;"></div>
+        </div>
+        
+        <script>
+            async function refreshSession() {{
+                const result = document.getElementById('result');
+                result.innerHTML = '<p>🔄 Refreshing session...</p>';
+                
+                try {{
+                    const response = await fetch('/refresh-session', {{ method: 'POST' }});
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {{
+                        result.innerHTML = '<div class="solution"><p>✅ Session refreshed! <a href="/dashboard">Try accessing dashboard again</a></p></div>';
+                    }} else {{
+                        result.innerHTML = '<div class="error"><p>❌ Refresh failed: ' + data.message + '</p></div>';
+                    }}
+                }} catch (e) {{
+                    result.innerHTML = '<div class="error"><p>❌ Error: ' + e.message + '</p></div>';
+                }}
+            }}
+            
+            async function checkStatus() {{
+                const result = document.getElementById('result');
+                result.innerHTML = '<p>📊 Checking status...</p>';
+                
+                try {{
+                    const response = await fetch('/session-status');
+                    const data = await response.json();
+                    
+                    result.innerHTML = '<div class="code"><pre>' + JSON.stringify(data, null, 2) + '</pre></div>';
+                }} catch (e) {{
+                    result.innerHTML = '<div class="error"><p>❌ Error: ' + e.message + '</p></div>';
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    return Response(content=error_html, status_code=403, headers={"Content-Type": "text/html"})
+
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_request(path: str, request: Request):
-    """Main proxy endpoint using HTTPX only"""
+    """Main proxy endpoint with enhanced 403 handling"""
     try:
         # Check session status
         session_status = await get_session_status()
@@ -77,7 +168,9 @@ async def proxy_request(path: str, request: Request):
             query_string = str(request.query_params)
             target_url += f"?{query_string}"
 
-        # Enhanced headers for different asset types
+        # Enhanced headers with randomization
+        content_type = get_content_type(target_url)
+        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
@@ -85,11 +178,15 @@ async def proxy_request(path: str, request: Request):
             "DNT": "1",
             "Connection": "keep-alive",
             "Cache-Control": "max-age=0",
+            "Pragma": "no-cache",
             "Referer": "https://app.stealthwriter.ai/dashboard",
+            "Origin": "https://app.stealthwriter.ai",
+            "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"'
         }
         
-        # Set specific Accept header based on content type
-        content_type = get_content_type(target_url)
+        # Set specific headers based on content type
         if content_type == 'text/css':
             headers["Accept"] = "text/css,*/*;q=0.1"
             headers["Sec-Fetch-Dest"] = "style"
@@ -115,6 +212,9 @@ async def proxy_request(path: str, request: Request):
 
         headers["Sec-Fetch-Site"] = "same-origin"
 
+        # Add a small random delay to avoid detection
+        await asyncio.sleep(random.uniform(0.1, 0.3))
+
         body = await request.body()
         response = await client.request(
             request.method,
@@ -123,6 +223,16 @@ async def proxy_request(path: str, request: Request):
             content=body,
             params=request.query_params
         )
+        
+        # Handle 403 Forbidden responses
+        if response.status_code == 403:
+            print(f"🛡️ Cloudflare 403 detected for: {target_url}")
+            # Only show error page for HTML requests, pass through assets
+            if content_type == 'text/html':
+                return handle_403_response(target_url)
+            else:
+                # For assets, try to pass through the response
+                print(f"⚠️ Asset blocked but passing through: {target_url}")
         
         filtered_headers = clean_headers(response.headers)
         
@@ -137,6 +247,8 @@ async def proxy_request(path: str, request: Request):
         if response.status_code == 200:
             asset_type = "asset" if content_type != 'text/html' else "page"
             print(f"✅ Proxy {asset_type}: {target_url}")
+        elif response.status_code == 403:
+            print(f"⚠️ Cloudflare blocked: {target_url}")
         else:
             print(f"⚠️ Proxy returned {response.status_code}: {target_url}")
         

@@ -29,7 +29,7 @@ def get_content_type(url: str) -> str:
         return 'application/javascript'
     elif url.endswith('.woff') or url.endswith('.woff2'):
         return 'font/woff2'
-    elif url.endswith('.ttf'):
+    elif url.endsWith('.ttf'):
         return 'font/ttf'
     elif url.endswith('.svg'):
         return 'image/svg+xml'
@@ -180,45 +180,126 @@ async def cache_html(url: str, html: str):
         print(f"💾 Cached response for: {url}")
 
 def fetch_html_with_selenium(url: str, cookies: list) -> str:
-    """Use Selenium to fetch HTML content with real browser and cookies"""
+    """Use Selenium to fetch HTML content with real browser and cookies - FIXED VERSION"""
     options = Options()
-    # Do NOT use headless mode but add performance options
-    options.add_argument("--disable-gpu")
+    
+    # Essential options for server environment
+    options.add_argument("--headless=new")  # Use new headless mode
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1200,800")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-plugins")
-    options.add_argument("--disable-images")  # Speed up loading
-    options.add_argument("--disable-javascript")  # Disable JS after page load
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
+    options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-backgrounding-occluded-windows")
+    options.add_argument("--disable-renderer-backgrounding")
+    options.add_argument("--disable-features=TranslateUI")
+    options.add_argument("--disable-ipc-flooding-protection")
+    options.add_argument("--window-size=1920,1080")
+    
+    # Memory and performance optimizations
+    options.add_argument("--memory-pressure-off")
+    options.add_argument("--max_old_space_size=4096")
+    options.add_argument("--aggressive-cache-discard")
+    
+    # Network and security
+    options.add_argument("--disable-web-security")
+    options.add_argument("--disable-features=VizDisplayCompositor")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--ignore-ssl-errors")
+    options.add_argument("--ignore-certificate-errors-spki-list")
+    
+    # User agent and automation detection bypass
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    # Allow JavaScript (needed for Cloudflare)
+    # DO NOT disable JavaScript - it's required for Cloudflare challenges
     
     driver = webdriver.Chrome(options=options)
-    driver.set_page_load_timeout(15)  # Reduce timeout
+    
+    # Increased timeouts for better reliability
+    driver.set_page_load_timeout(30)
+    driver.implicitly_wait(10)
     
     try:
+        # Hide automation flags
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        driver.execute_script("Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']})")
+        driver.execute_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
+        
+        print(f"🌐 Loading StealthWriter homepage...")
         driver.get("https://app.stealthwriter.ai/")
+        
+        # Wait for page to load
+        time.sleep(3)
+        
+        print(f"🍪 Adding {len(cookies)} cookies...")
         for cookie in cookies:
             cookie_dict = {k: v for k, v in cookie.items() if k in ["name", "value", "domain", "path", "secure", "httpOnly", "expiry"]}
             try:
                 driver.add_cookie(cookie_dict)
-            except Exception:
-                continue  # Skip invalid cookies
+            except Exception as e:
+                print(f"⚠️ Failed to add cookie {cookie.get('name', 'unknown')}: {e}")
+                continue
                 
+        print(f"🎯 Navigating to target: {url}")
         driver.get(url)
         
-        # Reduced wait time
+        # Wait for Cloudflare challenge to complete
+        print("⏳ Waiting for Cloudflare challenge...")
+        start_time = time.time()
+        max_wait = 45  # 45 seconds max wait
+        
+        while time.time() - start_time < max_wait:
+            current_url = driver.current_url
+            page_source = driver.page_source.lower()
+            
+            # Check if we're past the challenge
+            if ("verifying you are human" not in page_source and 
+                "challenge" not in page_source and
+                "cloudflare" not in page_source):
+                print("✅ Cloudflare challenge passed!")
+                break
+                
+            # Check for dashboard elements
+            try:
+                dashboard_element = driver.find_element(By.CSS_SELECTOR, '[data-slot="sidebar-wrapper"]')
+                if dashboard_element:
+                    print("✅ Dashboard loaded!")
+                    break
+            except:
+                pass
+                
+            print(f"⏳ Still waiting for challenge... ({int(time.time() - start_time)}s)")
+            time.sleep(2)
+        
+        # Additional wait for full page load
         try:
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, '[data-slot="sidebar-wrapper"]'))
+            WebDriverWait(driver, 15).until(
+                EC.any_of(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-slot="sidebar-wrapper"]')),
+                    EC.presence_of_element_located((By.TAG_NAME, "main")),
+                    EC.presence_of_element_located((By.ID, "root"))
+                )
             )
-        except Exception:
-            time.sleep(3)  # Shorter fallback wait
+            print("✅ Page elements loaded!")
+        except Exception as e:
+            print(f"⚠️ Timeout waiting for elements, proceeding anyway: {e}")
+            time.sleep(5)  # Fallback wait
             
         html = driver.page_source
+        print(f"📄 Retrieved HTML ({len(html)} characters)")
         return html
         
+    except Exception as e:
+        print(f"❌ Selenium error: {str(e)}")
+        raise
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+        except:
+            pass
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_request(path: str, request: Request):

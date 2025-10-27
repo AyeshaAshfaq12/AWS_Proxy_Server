@@ -9,6 +9,8 @@ import uuid
 import subprocess
 import json
 import signal
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+COOKIES_FILE = os.path.join(PROJECT_ROOT, "manual_cookies.json")
 
 def manual_login_and_capture_cookies():
     """
@@ -108,37 +110,21 @@ def manual_login_and_capture_cookies():
 
 def load_manual_cookies():
     """
-    Load cookies from manual_cookies.json file and return status dict for UI/health
+    Load cookies from manual_cookies.json file
     """
-    status = {
-        "exists": False,
-        "expired": True,
-        "count": 0,
-        "age_hours": None,
-        "url": None,
-        "cookies": [],
-        "error": None
-    }
     try:
-        cookies_file = "manual_cookies.json"
-        if not os.path.exists(cookies_file):
-            status["error"] = "manual_cookies.json file not found"
-            return status
+        if not os.path.exists(COOKIES_FILE):
+            return None
         with open(cookies_file, "r") as f:
             cookies_data = json.load(f)
         cookie_age = time.time() - cookies_data["timestamp"]
         max_age = 86400  # 24 hours
-        status["exists"] = True
-        status["count"] = len(cookies_data.get("cookies", []))
-        status["age_hours"] = cookie_age / 3600
-        status["url"] = cookies_data.get("url")
-        status["cookies"] = cookies_data.get("cookies", [])
         if cookie_age > max_age:
-            status["expired"] = True
-            status["error"] = f"Manual cookies are {cookie_age/3600:.1f} hours old (max {max_age/3600} hours)"
-        else:
-            status["expired"] = False
-        return status
+            print(f"⏰ Manual cookies are {cookie_age/3600:.1f} hours old (max {max_age/3600} hours)")
+            return None
+        cookies = cookies_data["cookies"]
+        print(f"✅ Loaded {len(cookies)} manual cookies (age: {cookie_age/3600:.1f} hours)")
+        return cookies
     except Exception as e:
-        status["error"] = f"Failed to load manual cookies: {e}"
-        return status
+        print(f"❌ Failed to load manual cookies: {e}")
+        return None

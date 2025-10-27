@@ -8,7 +8,8 @@ _master_client = None
 _master_client_lock = asyncio.Lock()
 _last_refresh = 0
 _session_timeout = int(os.getenv("SESSION_TIMEOUT", 3600))
-COOKIES_FILE = "manual_cookies.json"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+COOKIES_FILE = os.path.join(PROJECT_ROOT, "manual_cookies.json")
 
 def load_manual_cookies():
     """

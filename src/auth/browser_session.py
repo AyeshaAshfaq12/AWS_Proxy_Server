@@ -23,7 +23,7 @@ class BrowserSession:
             
             self.playwright = await async_playwright().start()
             
-            # Launch browser with stealth settings
+            # Launch browser with optimized settings
             self.browser = await self.playwright.chromium.launch(
                 headless=True,
                 args=[
@@ -40,11 +40,14 @@ class BrowserSession:
                     '--disable-backgrounding-occluded-windows',
                     '--disable-web-security',
                     '--disable-features=TranslateUI',
-                    '--disable-ipc-flooding-protection'
+                    '--disable-ipc-flooding-protection',
+                    '--enable-features=NetworkService,NetworkServiceLogging',
+                    '--aggressive-cache-discard',
+                    '--disable-background-networking'
                 ]
             )
             
-            # Create context with stealth settings
+            # Create context with enhanced settings
             self.context = await self.browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -137,6 +140,72 @@ class BrowserSession:
             print(f"❌ Failed to load cookies: {e}")
             return False
 
+    async def handle_static_asset(self, url: str) -> Dict[str, Any]:
+        """Handle static assets like CSS, JS, fonts, images using fetch"""
+        try:
+            if not self.page:
+                await self.start()
+            
+            self._last_activity = time.time()
+            
+            # Use fetch for static assets instead of navigation
+            result = await self.page.evaluate("""
+                async (url) => {
+                    try {
+                        const response = await fetch(url, {
+                            method: 'GET',
+                            credentials: 'include',
+                            headers: {
+                                'Accept': '*/*',
+                                'Accept-Language': 'en-US,en;q=0.9',
+                                'Cache-Control': 'no-cache',
+                                'Pragma': 'no-cache',
+                                'Sec-Fetch-Dest': 'style',
+                                'Sec-Fetch-Mode': 'no-cors',
+                                'Sec-Fetch-Site': 'same-origin',
+                                'Referer': 'https://app.stealthwriter.ai/dashboard'
+                            }
+                        });
+                        
+                        const content = await response.text();
+                        const headers = {};
+                        response.headers.forEach((value, key) => {
+                            headers[key] = value;
+                        });
+                        
+                        return {
+                            status: response.status,
+                            content: content,
+                            headers: headers,
+                            ok: response.ok
+                        };
+                    } catch (error) {
+                        return {
+                            status: 500,
+                            content: `/* Fetch error: ${error.message} */`,
+                            headers: {},
+                            ok: false
+                        };
+                    }
+                }
+            """, url)
+            
+            return {
+                'status_code': result['status'],
+                'content': result['content'],
+                'url': url,
+                'headers': result['headers']
+            }
+            
+        except Exception as e:
+            print(f"❌ Static asset fetch failed for {url}: {e}")
+            return {
+                'status_code': 500,
+                'content': f"/* Asset load error: {str(e)} */",
+                'url': url,
+                'headers': {}
+            }
+
     async def navigate_to_page(self, url: str) -> Dict[str, Any]:
         """Navigate to a page and return response details"""
         try:
@@ -145,21 +214,26 @@ class BrowserSession:
             
             self._last_activity = time.time()
             
-            # Navigate to page with longer timeout and different wait strategy
+            # Check if this is a static asset
+            static_extensions = ['.css', '.js', '.woff', '.woff2', '.ttf', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.ico']
+            if any(url.endswith(ext) for ext in static_extensions):
+                return await self.handle_static_asset(url)
+            
+            # Navigate to page for HTML content
             response = await self.page.goto(
                 url, 
-                wait_until='domcontentloaded',  # Changed from 'networkidle' to 'domcontentloaded'
-                timeout=60000  # Increased timeout to 60 seconds
+                wait_until='domcontentloaded',
+                timeout=30000  # Reduced timeout for faster response
             )
             
-            # Wait a bit for any dynamic content
-            await asyncio.sleep(2)
+            # Wait for basic content to load
+            await asyncio.sleep(1)
             
             # Check for Cloudflare challenge
             page_content = await self.page.content()
             if "challenge-platform" in page_content.lower() or "checking your browser" in page_content.lower():
                 print("⚠️ Cloudflare challenge detected, waiting...")
-                await asyncio.sleep(10)  # Wait longer for challenge to complete
+                await asyncio.sleep(5)
                 page_content = await self.page.content()
             
             return {
@@ -170,7 +244,7 @@ class BrowserSession:
             }
             
         except Exception as e:
-            print(f"❌ Navigation failed: {e}")
+            print(f"❌ Navigation failed for {url}: {e}")
             return {
                 'status_code': 500,
                 'content': f"<html><body><h1>Navigation Error</h1><p>{str(e)}</p></body></html>",
@@ -186,14 +260,15 @@ class BrowserSession:
             
             self._last_activity = time.time()
             
-            # For simple GET requests, just navigate
+            # For GET requests, use navigation or asset handling
             if method.upper() == 'GET' and not data:
                 return await self.navigate_to_page(url)
             
-            # For other requests, use page.evaluate with fetch
+            # For other methods, use fetch API
             fetch_options = {
                 'method': method,
-                'headers': headers or {}
+                'headers': headers or {},
+                'credentials': 'include'
             }
             
             if data:
@@ -203,16 +278,21 @@ class BrowserSession:
                 async ({ url, options }) => {
                     try {
                         const response = await fetch(url, options);
-                        const text = await response.text();
+                        const content = await response.text();
+                        const headers = {};
+                        response.headers.forEach((value, key) => {
+                            headers[key] = value;
+                        });
+                        
                         return {
                             status: response.status,
-                            content: text,
-                            headers: Object.fromEntries(response.headers.entries())
+                            content: content,
+                            headers: headers
                         };
                     } catch (error) {
                         return {
                             status: 500,
-                            content: `<html><body><h1>Fetch Error</h1><p>${error.message}</p></body></html>`,
+                            content: `Error: ${error.message}`,
                             headers: {}
                         };
                     }
@@ -227,10 +307,10 @@ class BrowserSession:
             }
             
         except Exception as e:
-            print(f"❌ Request failed: {e}")
+            print(f"❌ Request failed for {url}: {e}")
             return {
                 'status_code': 500,
-                'content': f"<html><body><h1>Request Error</h1><p>{str(e)}</p></body></html>",
+                'content': f"Request Error: {str(e)}",
                 'url': url,
                 'headers': {}
             }
@@ -242,19 +322,22 @@ class BrowserSession:
     async def close(self):
         """Close the browser session"""
         async with self._lock:
-            if self.page:
-                await self.page.close()
-                self.page = None
-            if self.context:
-                await self.context.close()
-                self.context = None
-            if self.browser:
-                await self.browser.close()
-                self.browser = None
-            if self.playwright:
-                await self.playwright.stop()
-                self.playwright = None
-            print("🔒 Browser session closed")
+            try:
+                if self.page:
+                    await self.page.close()
+                    self.page = None
+                if self.context:
+                    await self.context.close()
+                    self.context = None
+                if self.browser:
+                    await self.browser.close()
+                    self.browser = None
+                if self.playwright:
+                    await self.playwright.stop()
+                    self.playwright = None
+                print("🔒 Browser session closed")
+            except Exception as e:
+                print(f"⚠️ Error closing browser session: {e}")
 
 # Global browser session instance
 _browser_session: Optional[BrowserSession] = None

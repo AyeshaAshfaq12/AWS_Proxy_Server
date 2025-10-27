@@ -5,6 +5,8 @@ import os
 import asyncio
 import time
 import json
+import hashlib
+from typing import Optional
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -13,6 +15,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 router = APIRouter()
+
+# Cache for HTML responses
+_html_cache = {}
+_cache_lock = asyncio.Lock()
+_cache_timeout = 300  # 5 minutes
 
 def get_content_type(url: str) -> str:
     """Determine content type based on file extension"""
@@ -148,35 +155,74 @@ def handle_403_response(target_url: str) -> Response:
     """
     return Response(content=error_html, status_code=403, headers={"Content-Type": "text/html"})
 
+async def get_cached_html(url: str) -> Optional[str]:
+    """Check if we have cached HTML for this URL"""
+    async with _cache_lock:
+        cache_key = hashlib.md5(url.encode()).hexdigest()
+        if cache_key in _html_cache:
+            cached_data = _html_cache[cache_key]
+            if time.time() - cached_data['timestamp'] < _cache_timeout:
+                print(f"📋 Cache hit for: {url}")
+                return cached_data['html']
+            else:
+                # Remove expired cache
+                del _html_cache[cache_key]
+        return None
+
+async def cache_html(url: str, html: str):
+    """Cache HTML response"""
+    async with _cache_lock:
+        cache_key = hashlib.md5(url.encode()).hexdigest()
+        _html_cache[cache_key] = {
+            'html': html,
+            'timestamp': time.time()
+        }
+        print(f"💾 Cached response for: {url}")
+
 def fetch_html_with_selenium(url: str, cookies: list) -> str:
     """Use Selenium to fetch HTML content with real browser and cookies"""
     options = Options()
-    # Do NOT use headless mode
+    # Do NOT use headless mode but add performance options
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1200,800")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-images")  # Speed up loading
+    options.add_argument("--disable-javascript")  # Disable JS after page load
+    
     driver = webdriver.Chrome(options=options)
-    driver.get("https://app.stealthwriter.ai/")
-    for cookie in cookies:
-        # Selenium expects cookie dict keys: name, value, domain, path, secure, httpOnly, expiry
-        cookie_dict = {k: v for k, v in cookie.items() if k in ["name", "value", "domain", "path", "secure", "httpOnly", "expiry"]}
-        driver.add_cookie(cookie_dict)
-    driver.get(url)
+    driver.set_page_load_timeout(15)  # Reduce timeout
+    
     try:
-        # Wait up to 30 seconds for dashboard sidebar to appear
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, '[data-slot="sidebar-wrapper"]'))
-        )
-    except Exception:
-        time.sleep(10)  # fallback wait
-    html = driver.page_source
-    driver.quit()
-    return html
+        driver.get("https://app.stealthwriter.ai/")
+        for cookie in cookies:
+            cookie_dict = {k: v for k, v in cookie.items() if k in ["name", "value", "domain", "path", "secure", "httpOnly", "expiry"]}
+            try:
+                driver.add_cookie(cookie_dict)
+            except Exception:
+                continue  # Skip invalid cookies
+                
+        driver.get(url)
+        
+        # Reduced wait time
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, '[data-slot="sidebar-wrapper"]'))
+            )
+        except Exception:
+            time.sleep(3)  # Shorter fallback wait
+            
+        html = driver.page_source
+        return html
+        
+    finally:
+        driver.quit()
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_request(path: str, request: Request):
-    """Main proxy endpoint - simplified approach"""
+    """Main proxy endpoint with smart caching and fallback"""
     try:
         # Check session status
         session_status = await get_session_status()
@@ -188,8 +234,6 @@ async def proxy_request(path: str, request: Request):
                 detail=f"Session unavailable: {cookie_status.get('error', 'No valid cookies')}"
             )
 
-        client = await get_authenticated_client()
-        
         # Handle root path
         if path == "" or path == "/":
             path = "dashboard"
@@ -201,36 +245,75 @@ async def proxy_request(path: str, request: Request):
             query_string = str(request.query_params)
             target_url += f"?{query_string}"
 
-        # Simple headers for better compatibility
         content_type = get_content_type(target_url)
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Referer": "https://app.stealthwriter.ai/dashboard",
-            "Origin": "https://app.stealthwriter.ai",
-            "Sec-Fetch-Site": "same-origin",
-            "DNT": "1"
-        }
-        
-        # Set Accept header based on content type
-        if content_type == 'text/css':
-            headers["Accept"] = "text/css,*/*;q=0.1"
-        elif content_type == 'application/javascript':
-            headers["Accept"] = "*/*"
-        elif content_type.startswith('image/'):
-            headers["Accept"] = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-        else:
-            headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-
-        body = await request.body()
-
-        # Robust: Use Selenium for HTML pages, HTTPX for assets
+        # For HTML pages: Try cache first, then HTTPX, then Selenium as last resort
         if content_type == "text/html":
+            
+            # 1. Check cache first
+            cached_html = await get_cached_html(target_url)
+            if cached_html:
+                return Response(
+                    content=cached_html,
+                    status_code=200,
+                    headers={
+                        "Content-Type": "text/html",
+                        "Access-Control-Allow-Origin": "*",
+                        "Cache-Control": "no-cache"
+                    }
+                )
+            
+            # 2. Try HTTPX first (faster)
+            try:
+                client = await get_authenticated_client()
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Referer": "https://app.stealthwriter.ai/dashboard",
+                    "Origin": "https://app.stealthwriter.ai",
+                    "Sec-Fetch-Site": "same-origin",
+                    "DNT": "1"
+                }
+                
+                body = await request.body()
+                response = await client.request(
+                    request.method,
+                    target_url,
+                    headers=headers,
+                    content=body,
+                    params=request.query_params,
+                    timeout=10  # Quick timeout
+                )
+                
+                # If HTTPX succeeds and doesn't get Cloudflare challenge
+                if response.status_code == 200 and "Verifying you are human" not in response.text:
+                    print(f"⚡ HTTPX success for: {target_url}")
+                    await cache_html(target_url, response.text)
+                    return Response(
+                        content=response.text,
+                        status_code=200,
+                        headers={
+                            "Content-Type": "text/html",
+                            "Access-Control-Allow-Origin": "*",
+                            "Cache-Control": "no-cache"
+                        }
+                    )
+                else:
+                    print(f"🔄 HTTPX got challenge, falling back to Selenium for: {target_url}")
+                    
+            except Exception as e:
+                print(f"⚠️ HTTPX failed, using Selenium for: {target_url}")
+            
+            # 3. Fallback to Selenium (slower but more reliable)
             try:
                 cookies = cookie_status.get("cookies", [])
-                html = fetch_html_with_selenium(target_url, cookies)
+                print(f"🤖 Using Selenium for: {target_url}")
+                html = await asyncio.get_event_loop().run_in_executor(
+                    None, fetch_html_with_selenium, target_url, cookies
+                )
+                await cache_html(target_url, html)
                 return Response(
                     content=html,
                     status_code=200,
@@ -243,7 +326,29 @@ async def proxy_request(path: str, request: Request):
             except Exception as e:
                 print(f"❌ Selenium fetch failed: {str(e)}")
                 return handle_403_response(target_url)
+        
+        # For non-HTML assets: Use HTTPX only
         else:
+            client = await get_authenticated_client()
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Referer": "https://app.stealthwriter.ai/dashboard",
+                "Origin": "https://app.stealthwriter.ai",
+                "Sec-Fetch-Site": "same-origin",
+                "DNT": "1"
+            }
+            
+            # Set Accept header based on content type
+            if content_type == 'text/css':
+                headers["Accept"] = "text/css,*/*;q=0.1"
+            elif content_type == 'application/javascript':
+                headers["Accept"] = "*/*"
+            elif content_type.startswith('image/'):
+                headers["Accept"] = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+
+            body = await request.body()
             response = await client.request(
                 request.method,
                 target_url,
@@ -251,19 +356,22 @@ async def proxy_request(path: str, request: Request):
                 content=body,
                 params=request.query_params
             )
+            
             filtered_headers = clean_headers(response.headers)
             filtered_headers.update({
                 "Content-Type": content_type,
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
                 "Access-Control-Allow-Headers": "*",
-                "Cache-Control": "public, max-age=3600" if content_type != 'text/html' else "no-cache"
+                "Cache-Control": "public, max-age=3600"
             })
+            
             return Response(
                 content=response.content,
                 status_code=response.status_code,
                 headers=filtered_headers
             )
+            
     except Exception as e:
         print(f"❌ Proxy error: {str(e)}")
         return Response(
@@ -279,6 +387,9 @@ async def manual_login_endpoint():
         print("🚀 Starting manual login process...")
         cookies = await asyncio.get_event_loop().run_in_executor(None, manual_login_and_capture_cookies)
         if cookies:
+            # Clear cache when getting new login
+            async with _cache_lock:
+                _html_cache.clear()
             await force_refresh_session()
             return {
                 "status": "success",
@@ -302,10 +413,24 @@ async def session_status():
 async def refresh_session():
     """Force refresh session"""
     try:
+        # Clear cache when refreshing session
+        async with _cache_lock:
+            _html_cache.clear()
         await force_refresh_session()
         return {"status": "success", "message": "Session refreshed successfully"}
     except Exception as e:
         return {"status": "error", "message": f"Session refresh failed: {str(e)}"}
+
+@router.post("/clear-cache")
+async def clear_cache():
+    """Clear HTML cache"""
+    try:
+        async with _cache_lock:
+            cache_count = len(_html_cache)
+            _html_cache.clear()
+        return {"status": "success", "message": f"Cleared {cache_count} cached pages"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @router.post("/update-cookies")
 async def update_cookies_endpoint(request: Request):
@@ -327,6 +452,9 @@ async def update_cookies_endpoint(request: Request):
         with open(COOKIES_FILE_PATH, "w") as f:
             json.dump(cookies_data, f, indent=2)
         
+        # Clear cache when updating cookies
+        async with _cache_lock:
+            _html_cache.clear()
         await force_refresh_session()
         
         return {

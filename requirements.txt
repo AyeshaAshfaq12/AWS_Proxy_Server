@@ -2,7 +2,5 @@ fastapi
 uvicorn
 httpx[http2]
 structlog
-boto3
 python-dotenv
 selenium
-playwright

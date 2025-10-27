@@ -1,12 +1,10 @@
 from fastapi import APIRouter, Request, Response, HTTPException
-from httpx import AsyncClient, RequestError
 from auth.session import get_authenticated_client, force_refresh_session, get_session_status
 from auth.selenium_login import manual_login_and_capture_cookies, load_manual_cookies
 import os
 import asyncio
 import time
 import json
-import mimetypes
 
 router = APIRouter()
 
@@ -46,7 +44,6 @@ def clean_headers(headers: dict) -> dict:
             continue
         
         if isinstance(v, str):
-            # Remove newlines and other problematic characters
             clean_value = v.replace('\n', ' ').replace('\r', ' ').strip()
             if clean_value and len(clean_value) < 8192:
                 filtered_headers[k] = clean_value
@@ -54,89 +51,13 @@ def clean_headers(headers: dict) -> dict:
     return filtered_headers
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def smart_proxy(path: str, request: Request):
-    """
-    Smart proxy that uses browser session for better compatibility
-    """
-    try:
-        # Try browser session first
-        try:
-            from auth.browser_session import get_browser_session
-            browser_session = await get_browser_session()
-            
-            # Handle root path
-            if path == "" or path == "/":
-                path = "dashboard"
-            
-            target_url = os.getenv("TARGET_URL").rstrip("/") + "/" + path
-            
-            # Add query parameters if any
-            if request.query_params:
-                query_string = str(request.query_params)
-                target_url += f"?{query_string}"
-            
-            body = await request.body()
-            
-            # Make request using browser
-            result = await browser_session.make_request(
-                method=request.method,
-                url=target_url,
-                headers=dict(request.headers),
-                data=body if body else None
-            )
-            
-            # Determine content type
-            content_type = get_content_type(target_url)
-            
-            # Clean headers
-            filtered_headers = clean_headers(result.get('headers', {}))
-            
-            # Add essential headers
-            filtered_headers.update({
-                "Content-Type": content_type,
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "*",
-                "Cache-Control": "public, max-age=3600" if content_type != 'text/html' else "no-cache"
-            })
-            
-            status_code = result['status_code']
-            content = result['content']
-            
-            # Log successful requests
-            if status_code == 200:
-                asset_type = "asset" if content_type != 'text/html' else "page"
-                print(f"✅ Browser proxy {asset_type}: {target_url}")
-            else:
-                print(f"⚠️ Browser proxy returned {status_code}: {target_url}")
-            
-            return Response(
-                content=content,
-                status_code=status_code,
-                headers=filtered_headers
-            )
-            
-        except ImportError:
-            print("⚠️ Browser session not available, using HTTPX fallback")
-            return await httpx_fallback(path, request)
-        except Exception as e:
-            print(f"⚠️ Browser session error: {e}, using HTTPX fallback")
-            return await httpx_fallback(path, request)
-            
-    except Exception as e:
-        print(f"❌ Proxy error: {str(e)}")
-        return Response(
-            content=f"<html><body><h1>Proxy Error</h1><p>{str(e)}</p></body></html>",
-            status_code=500,
-            headers={"Content-Type": "text/html"}
-        )
-
-async def httpx_fallback(path: str, request: Request):
-    """HTTPX fallback proxy"""
+async def proxy_request(path: str, request: Request):
+    """Main proxy endpoint using HTTPX only"""
     try:
         # Check session status
         session_status = await get_session_status()
         cookie_status = session_status.get("cookie_status", {})
+        
         if not cookie_status.get("exists") or cookie_status.get("expired", True):
             raise HTTPException(
                 status_code=401,
@@ -145,29 +66,54 @@ async def httpx_fallback(path: str, request: Request):
 
         client = await get_authenticated_client()
         
+        # Handle root path
         if path == "" or path == "/":
             path = "dashboard"
         
         target_url = os.getenv("TARGET_URL").rstrip("/") + "/" + path
         
+        # Add query parameters
         if request.query_params:
             query_string = str(request.query_params)
             target_url += f"?{query_string}"
 
-        # Enhanced headers
+        # Enhanced headers for different asset types
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
             "DNT": "1",
             "Connection": "keep-alive",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
             "Cache-Control": "max-age=0",
             "Referer": "https://app.stealthwriter.ai/dashboard",
         }
+        
+        # Set specific Accept header based on content type
+        content_type = get_content_type(target_url)
+        if content_type == 'text/css':
+            headers["Accept"] = "text/css,*/*;q=0.1"
+            headers["Sec-Fetch-Dest"] = "style"
+            headers["Sec-Fetch-Mode"] = "no-cors"
+        elif content_type == 'application/javascript':
+            headers["Accept"] = "*/*"
+            headers["Sec-Fetch-Dest"] = "script"
+            headers["Sec-Fetch-Mode"] = "no-cors"
+        elif content_type.startswith('font/'):
+            headers["Accept"] = "*/*"
+            headers["Sec-Fetch-Dest"] = "font"
+            headers["Sec-Fetch-Mode"] = "cors"
+        elif content_type.startswith('image/'):
+            headers["Accept"] = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+            headers["Sec-Fetch-Dest"] = "image"
+            headers["Sec-Fetch-Mode"] = "no-cors"
+        else:
+            headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+            headers["Sec-Fetch-Dest"] = "document"
+            headers["Sec-Fetch-Mode"] = "navigate"
+            headers["Sec-Fetch-User"] = "?1"
+            headers["Upgrade-Insecure-Requests"] = "1"
+
+        headers["Sec-Fetch-Site"] = "same-origin"
 
         body = await request.body()
         response = await client.request(
@@ -178,19 +124,21 @@ async def httpx_fallback(path: str, request: Request):
             params=request.query_params
         )
         
-        content_type = get_content_type(target_url)
         filtered_headers = clean_headers(response.headers)
         
         filtered_headers.update({
             "Content-Type": content_type,
             "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
             "Cache-Control": "public, max-age=3600" if content_type != 'text/html' else "no-cache"
         })
         
         if response.status_code == 200:
-            print(f"✅ HTTPX fallback successful: {target_url}")
+            asset_type = "asset" if content_type != 'text/html' else "page"
+            print(f"✅ Proxy {asset_type}: {target_url}")
         else:
-            print(f"⚠️ HTTPX fallback returned {response.status_code}: {target_url}")
+            print(f"⚠️ Proxy returned {response.status_code}: {target_url}")
         
         return Response(
             content=response.content,
@@ -199,8 +147,12 @@ async def httpx_fallback(path: str, request: Request):
         )
         
     except Exception as e:
-        print(f"❌ HTTPX fallback error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Fallback proxy error: {str(e)}")
+        print(f"❌ Proxy error: {str(e)}")
+        return Response(
+            content=f"<html><body><h1>Proxy Error</h1><p>{str(e)}</p></body></html>",
+            status_code=500,
+            headers={"Content-Type": "text/html"}
+        )
 
 @router.get("/manual-login")
 async def manual_login_endpoint():
@@ -210,13 +162,6 @@ async def manual_login_endpoint():
         cookies = await asyncio.get_event_loop().run_in_executor(None, manual_login_and_capture_cookies)
         if cookies:
             await force_refresh_session()
-            # Refresh browser session if available
-            try:
-                from auth.browser_session import refresh_browser_session
-                await refresh_browser_session()
-            except ImportError:
-                pass
-            
             return {
                 "status": "success",
                 "message": f"Manual login completed. Captured {len(cookies)} cookies.",
@@ -231,37 +176,16 @@ async def manual_login_endpoint():
 async def session_status():
     """Check current session status"""
     try:
-        status = await get_session_status()
-        manual_cookies = load_manual_cookies()
-        status["manual_cookies_available"] = bool(manual_cookies)
-        if manual_cookies:
-            status["manual_cookie_count"] = len(manual_cookies)
-        
-        # Check browser session if available
-        try:
-            from auth.browser_session import get_browser_session
-            browser_session = await get_browser_session()
-            status["browser_session_active"] = browser_session is not None
-        except Exception:
-            status["browser_session_active"] = False
-            
-        return status
+        return await get_session_status()
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @router.post("/refresh-session")
 async def refresh_session():
-    """Force refresh both HTTP and browser sessions"""
+    """Force refresh session"""
     try:
         await force_refresh_session()
-        # Refresh browser session if available
-        try:
-            from auth.browser_session import refresh_browser_session
-            await refresh_browser_session()
-        except ImportError:
-            pass
-        
-        return {"status": "success", "message": "Sessions refreshed successfully"}
+        return {"status": "success", "message": "Session refreshed successfully"}
     except Exception as e:
         return {"status": "error", "message": f"Session refresh failed: {str(e)}"}
 
@@ -286,16 +210,10 @@ async def update_cookies_endpoint(request: Request):
             json.dump(cookies_data, f, indent=2)
         
         await force_refresh_session()
-        # Refresh browser session if available
-        try:
-            from auth.browser_session import refresh_browser_session
-            await refresh_browser_session()
-        except ImportError:
-            pass
         
         return {
             "status": "success",
-            "message": f"Updated {len(body['cookies'])} cookies and refreshed sessions",
+            "message": f"Updated {len(body['cookies'])} cookies and refreshed session",
             "cookie_count": len(body["cookies"])
         }
         

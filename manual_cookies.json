@@ -1,46 +1,32 @@
 {
-  "timestamp": 1761159174,
+  "timestamp": 1730000000,
   "url": "https://app.stealthwriter.ai/dashboard",
   "cookies": [
     {
+      "domain": "app.stealthwriter.ai",
+      "expirationDate": 1762152128.798853,
+      "hostOnly": true,
+      "httpOnly": true,
       "name": "__Secure-better-auth.session_token",
-      "value": "3Nays3AMT1t2B5GjY6HCpfgw1V3w2vDW.QRWiNVIqtZ7pm2b2ejt616seZP7fm%2B00LLEIe2P2TLY%3D",
-      "domain": ".stealthwriter.ai",
       "path": "/",
+      "sameSite": "lax",
       "secure": true,
-      "httpOnly": true
+      "session": false,
+      "storeId": null,
+      "value": "wn8pHgrkTnInd4qPrqlI65BwUqZEWReY.Or9Mob31Re1MiDWlxXNZg8jGWPSfoiflGbePJphBez0%3D"
     },
     {
-      "name": "_fbp",
-      "value": "fb.1.1761159174437.716440727532027868",
-      "domain": ".stealthwriter.ai",
+      "domain": "app.stealthwriter.ai",
+      "expirationDate": 1761547628.798947,
+      "hostOnly": true,
+      "httpOnly": true,
+      "name": "__Secure-better-auth.session_data",
       "path": "/",
-      "secure": false,
-      "httpOnly": false
-    },
-    {
-      "name": "_gcl_au",
-      "value": "1.1.385005791.1761159176",
-      "domain": ".stealthwriter.ai",
-      "path": "/",
-      "secure": false,
-      "httpOnly": false
-    },
-    {
-      "name": "intercom-device-id-esc25l7u",
-      "value": "aa1ac6d7-b4b6-4745-9ade-62f9e0ab4008",
-      "domain": ".stealthwriter.ai",
-      "path": "/",
-      "secure": false,
-      "httpOnly": false
-    },
-    {
-      "name": "intercom-session-esc25l7u",
-      "value": "Q3hOZjZSRnFiamRuSlFxZGJyNWdwbFBxeWI3RWY2ZnFPb1cvQWJ2M2hTSnU3Yy9PeG9vQ3pOUUF2TFZSa1ZMaTFHWGp1UHFYWHc0b2dDMzZwWnVpelpoN2lBUmpwdlRudlZ0QS8vV1BpL009LS1HWWE1cWJHWFFodXpxdUdnRWYxTVlRPT0=--60cadbf1668eb647a7e1607ecee40508eb53f57c",
-      "domain": ".stealthwriter.ai",
-      "path": "/",
-      "secure": false,
-      "httpOnly": false
+      "sameSite": "lax",
+      "secure": true,
+      "session": false,
+      "storeId": null,
+      "value": "eyJzZXNzaW9uIjp7InNlc3Npb24iOnsiZXhwaXJlc0F0IjoiMjAyNS0xMS0wM1QwNjo0MjowNi4yNjlaIiwidG9rZW4iOiJ3bjhwSGdya1RuSW5kNHFQcnFsSTY1QndVcVpFV1JlWSIsImNyZWF0ZWRBdCI6IjIwMjUtMTAtMjdUMDY6NDI6MDYuMjc0WiIsInVwZGF0ZWRBdCI6IjIwMjUtMTAtMjdUMDY6NDI6MDYuMjc0WiIsImlwQWRkcmVzcyI6IiIsInVzZXJBZ2VudCI6IiIsInVzZXJJZCI6Im85MWtMZkN2bzhWNEpkdFZDbDhzRVVpd0hYN2t0WUZMIiwiaWQiOiJ3MEdHN1J3cTgwbVI4VVd1VzhUOFhWY29UVnlkZTFqUCJ9LCJ1c2VyIjp7Im5hbWUiOiJBeWVzaGEgQXNoZmFxIiwiZW1haWwiOiJheWVzaGFhc2hmYXE5MjVAZ21haWwuY29tIiwiZW1haWxWZXJpZmllZCI6dHJ1ZSwiaW1hZ2UiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjUtMTAtMjRUMjA6MDg6MzEuMjQ3WiIsInVwZGF0ZWRBdCI6IjIwMjUtMTAtMjRUMjA6MDk6MDEuNzI5WiIsImlkIjoibzkxa0xmQ3ZvOFY0SmR0VkNsOHNFVWl3SFg3a3RZRkwifX0sImV4cGlyZXNBdCI6MTc2MTU0NzYyNzE4Niwic2lnbmF0dXJlIjoiS2hRWkZtSkxWZ0t2OUZXbWcxZXlXdmRjWXhuZW1aeE1UUVhLSm5oS2RCbyJ9"
     }
   ]
 }

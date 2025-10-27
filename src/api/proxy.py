@@ -6,6 +6,9 @@ import asyncio
 import time
 import json
 
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
 router = APIRouter()
 
 def get_content_type(url: str) -> str:
@@ -142,6 +145,25 @@ def handle_403_response(target_url: str) -> Response:
     """
     return Response(content=error_html, status_code=403, headers={"Content-Type": "text/html"})
 
+def fetch_html_with_selenium(url: str, cookies: list) -> str:
+    """Use Selenium to fetch HTML content with real browser and cookies"""
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1200,800")
+    driver = webdriver.Chrome(options=options)
+    driver.get("https://app.stealthwriter.ai/")
+    for cookie in cookies:
+        # Selenium expects cookie dict keys: name, value, domain, path, etc.
+        cookie_dict = {k: v for k, v in cookie.items() if k in ["name", "value", "domain", "path", "secure", "httpOnly", "expiry"]}
+        driver.add_cookie(cookie_dict)
+    driver.get(url)
+    html = driver.page_source
+    driver.quit()
+    return html
+
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_request(path: str, request: Request):
     """Main proxy endpoint - simplified approach"""
@@ -193,47 +215,45 @@ async def proxy_request(path: str, request: Request):
             headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
 
         body = await request.body()
-        
-        # Single request attempt
-        response = await client.request(
-            request.method,
-            target_url,
-            headers=headers,
-            content=body,
-            params=request.query_params
-        )
-        
-        # Handle 403 Forbidden responses
-        if response.status_code == 403:
-            print(f"🛡️ Cloudflare 403 detected for: {target_url}")
-            # Only show error page for HTML requests
-            if content_type == 'text/html':
+
+        # Robust: Use Selenium for HTML pages, HTTPX for assets
+        if content_type == "text/html":
+            try:
+                cookies = cookie_status.get("cookies", [])
+                html = fetch_html_with_selenium(target_url, cookies)
+                return Response(
+                    content=html,
+                    status_code=200,
+                    headers={
+                        "Content-Type": "text/html",
+                        "Access-Control-Allow-Origin": "*",
+                        "Cache-Control": "no-cache"
+                    }
+                )
+            except Exception as e:
+                print(f"❌ Selenium fetch failed: {str(e)}")
                 return handle_403_response(target_url)
-        
-        filtered_headers = clean_headers(response.headers)
-        
-        filtered_headers.update({
-            "Content-Type": content_type,
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-            "Cache-Control": "public, max-age=3600" if content_type != 'text/html' else "no-cache"
-        })
-        
-        if response.status_code == 200:
-            asset_type = "asset" if content_type != 'text/html' else "page"
-            print(f"✅ Proxy {asset_type}: {target_url}")
-        elif response.status_code == 403:
-            print(f"⚠️ Cloudflare blocked: {target_url}")
         else:
-            print(f"⚠️ Proxy returned {response.status_code}: {target_url}")
-        
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            headers=filtered_headers
-        )
-        
+            response = await client.request(
+                request.method,
+                target_url,
+                headers=headers,
+                content=body,
+                params=request.query_params
+            )
+            filtered_headers = clean_headers(response.headers)
+            filtered_headers.update({
+                "Content-Type": content_type,
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Cache-Control": "public, max-age=3600" if content_type != 'text/html' else "no-cache"
+            })
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers=filtered_headers
+            )
     except Exception as e:
         print(f"❌ Proxy error: {str(e)}")
         return Response(
